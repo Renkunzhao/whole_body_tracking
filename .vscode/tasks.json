@@ -37,6 +37,12 @@
       ]
     },
     {
+      "id": "video_interval",
+      "type": "promptString",
+      "description": "Type video interval",
+      "default": "2000",
+    },
+    {
       "id": "num_envs",
       "type": "promptString",
       "description": "Type number of environments",
@@ -91,8 +97,8 @@
         "python", "rsl_rl/train.py",
         "--task", "${input:Task}", 
         "--video",
+        "--video_interval", "${input:video_interval}",
         "--registry_name", "${input:registry_name}",
-        "--headless", 
         "--logger", "wandb", 
         "--log_project_name", "WBT", 
         "--run_name", "wbt-${input:output_name}"
