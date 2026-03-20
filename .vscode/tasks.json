@@ -1,0 +1,120 @@
+{
+  "version": "2.0.0",
+  "inputs": [
+    {
+      "id": "input_file",
+      "type": "promptString",
+      "description": "Type input motion file path",
+      "default": ""
+    },
+    {
+      "id": "input_fps",
+      "type": "promptString",
+      "description": "Type input motion FPS",
+      "default": "50"
+    },
+    {
+      "id": "output_name",
+      "type": "promptString",
+      "description": "Type output motion name",
+      "default": ""
+    },
+    {
+      "id": "registry_name",
+      "type": "promptString",
+      "description": "Type wandb motion registry name",
+      "default": ""
+    },
+    {
+      "id": "Task",
+      "type": "pickString",
+      "description": "Select task name",
+      "default": "Tracking-Flat-G1-v0",
+      "options": [
+        "Tracking-Flat-G1-v0",
+        "Tracking-Flat-G1-Wo-State-Estimation-v0",
+        "Tracking-Flat-G1-Low-Freq-v0"
+      ]
+    },
+    {
+      "id": "num_envs",
+      "type": "promptString",
+      "description": "Type number of environments",
+      "default": "1",
+    },
+    {
+      "id": "wandb_path",
+      "type": "promptString",
+      "description": "Type wandb run path",
+      "default": ""
+    }
+  ],
+  "tasks": [
+    {
+      "label": "Convert Motion",
+      "type": "shell",
+      "command": "conda",
+      "args": [
+        "run",
+        "--no-capture-output",
+        "-n", "isaaclab",
+        "python", "csv_to_npz.py",
+        "--input_file", "${input:input_file}", 
+        "--input_fps", "${input:input_fps}", 
+        "--output_name", "wbt-${input:output_name}", 
+      ],
+      "options": { "cwd": "${workspaceFolder}/scripts" },
+      "problemMatcher": []
+    },
+    {
+      "label": "Replay Motion",
+      "type": "shell",
+      "command": "conda",
+      "args": [
+        "run",
+        "--no-capture-output",
+        "-n", "isaaclab",
+        "python", "replay_npz.py",
+        "--registry_name", "${input:registry_name}"
+      ],
+      "options": { "cwd": "${workspaceFolder}/scripts" },
+      "problemMatcher": []
+    },
+    {
+      "label": "Train",
+      "type": "shell",
+      "command": "conda",
+      "args": [
+        "run",
+        "--no-capture-output",
+        "-n", "isaaclab",
+        "python", "rsl_rl/train.py",
+        "--task", "${input:Task}", 
+        "--video",
+        "--registry_name", "${input:registry_name}",
+        "--headless", 
+        "--logger", "wandb", 
+        "--log_project_name", "WBT", 
+        "--run_name", "wbt-${input:output_name}"
+      ],
+      "options": { "cwd": "${workspaceFolder}/scripts" },
+      "problemMatcher": []
+    },
+    {
+      "label": "Play",
+      "type": "shell",
+      "command": "conda",
+      "args": [
+        "run",
+        "--no-capture-output",
+        "-n", "isaaclab",
+        "python", "rsl_rl/play.py",
+        "--task", "${input:Task}", 
+        "--num_envs", "${input:num_envs}", 
+        "--wandb_path", "${input:wandb_path}"
+      ],
+      "options": { "cwd": "${workspaceFolder}/scripts" },
+      "problemMatcher": []
+    },
+  ]
+}
