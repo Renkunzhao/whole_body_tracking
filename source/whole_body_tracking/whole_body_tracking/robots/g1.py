@@ -1,3 +1,6 @@
+import getpass
+from pathlib import Path
+
 import isaaclab.sim as sim_utils
 from isaaclab.actuators import ImplicitActuatorCfg
 from isaaclab.assets.articulation import ArticulationCfg
@@ -22,11 +25,15 @@ DAMPING_7520_14 = 2.0 * DAMPING_RATIO * ARMATURE_7520_14 * NATURAL_FREQ
 DAMPING_7520_22 = 2.0 * DAMPING_RATIO * ARMATURE_7520_22 * NATURAL_FREQ
 DAMPING_4010 = 2.0 * DAMPING_RATIO * ARMATURE_4010 * NATURAL_FREQ
 
+# Keep URDF conversion output in a per-user cache instead of the shared /tmp/IsaacLab path.
+G1_USD_CACHE_DIR = Path.home() / ".cache" / "isaaclab" / "usd" / getpass.getuser() / "g1"
+
 G1_CYLINDER_CFG = ArticulationCfg(
     spawn=sim_utils.UrdfFileCfg(
         fix_base=False,
         replace_cylinders_with_capsules=True,
         asset_path=f"{ASSET_DIR}/unitree_description/urdf/g1/main.urdf",
+        usd_dir=str(G1_USD_CACHE_DIR),
         activate_contact_sensors=True,
         rigid_props=sim_utils.RigidBodyPropertiesCfg(
             disable_gravity=False,

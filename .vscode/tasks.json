@@ -98,6 +98,7 @@
         "--task", "${input:Task}", 
         "--video",
         "--video_interval", "${input:video_interval}",
+        "--headless", 
         "--registry_name", "${input:registry_name}",
         "--logger", "wandb", 
         "--log_project_name", "WBT", 
