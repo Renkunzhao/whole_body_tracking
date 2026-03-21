@@ -6,7 +6,7 @@ import os
 import torch
 from collections.abc import Sequence
 from dataclasses import MISSING
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from isaaclab.assets import Articulation
 from isaaclab.managers import CommandTerm, CommandTermCfg
@@ -240,10 +240,22 @@ class MotionCommand(CommandTerm):
         self.metrics["sampling_top1_prob"][:] = pmax
         self.metrics["sampling_top1_bin"][:] = imax.float() / self.bin_count
 
+    def _uniform_sampling(self, env_ids: Sequence[int]):
+        self.time_steps[env_ids] = torch.randint(0, self.motion.time_step_total, (len(env_ids),), device=self.device)
+        self.metrics["sampling_entropy"][:] = 1.0
+        self.metrics["sampling_top1_prob"][:] = 1.0 / self.bin_count
+        self.metrics["sampling_top1_bin"][:] = 0.5
+
     def _resample_command(self, env_ids: Sequence[int]):
         if len(env_ids) == 0:
             return
-        self._adaptive_sampling(env_ids)
+        if self.cfg.sampling_mode == "start":
+            self.time_steps[env_ids] = 0
+        elif self.cfg.sampling_mode == "uniform":
+            self._uniform_sampling(env_ids)
+        else:
+            assert self.cfg.sampling_mode == "adaptive"
+            self._adaptive_sampling(env_ids)
 
         root_pos = self.body_pos_w[:, 0].clone()
         root_ori = self.body_quat_w[:, 0].clone()
@@ -293,10 +305,12 @@ class MotionCommand(CommandTerm):
         self.body_quat_relative_w = quat_mul(delta_ori_w, self.body_quat_w)
         self.body_pos_relative_w = delta_pos_w + quat_apply(delta_ori_w, self.body_pos_w - anchor_pos_w_repeat)
 
-        self.bin_failed_count = (
-            self.cfg.adaptive_alpha * self._current_bin_failed + (1 - self.cfg.adaptive_alpha) * self.bin_failed_count
-        )
-        self._current_bin_failed.zero_()
+        if self.cfg.sampling_mode == "adaptive":
+            self.bin_failed_count = (
+                self.cfg.adaptive_alpha * self._current_bin_failed
+                + (1 - self.cfg.adaptive_alpha) * self.bin_failed_count
+            )
+            self._current_bin_failed.zero_()
 
     def _set_debug_vis_impl(self, debug_vis: bool):
         if debug_vis:
@@ -369,6 +383,7 @@ class MotionCommandCfg(CommandTermCfg):
     adaptive_lambda: float = 0.8
     adaptive_uniform_ratio: float = 0.1
     adaptive_alpha: float = 0.001
+    sampling_mode: Literal["adaptive", "uniform", "start"] = "adaptive"
 
     anchor_visualizer_cfg: VisualizationMarkersCfg = FRAME_MARKER_CFG.replace(prim_path="/Visuals/Command/pose")
     anchor_visualizer_cfg.markers["frame"].scale = (0.2, 0.2, 0.2)

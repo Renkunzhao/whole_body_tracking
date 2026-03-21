@@ -55,27 +55,34 @@ class _OnnxMotionPolicyExporter(_OnnxPolicyExporter):
 
     def export(self, path, filename):
         self.to("cpu")
+        was_training = self.training
+        self.eval()
         obs = torch.zeros(1, self.actor[0].in_features)
         time_step = torch.zeros(1, 1)
-        torch.onnx.export(
-            self,
-            (obs, time_step),
-            os.path.join(path, filename),
-            export_params=True,
-            opset_version=11,
-            verbose=self.verbose,
-            input_names=["obs", "time_step"],
-            output_names=[
-                "actions",
-                "joint_pos",
-                "joint_vel",
-                "body_pos_w",
-                "body_quat_w",
-                "body_lin_vel_w",
-                "body_ang_vel_w",
-            ],
-            dynamic_axes={},
-        )
+        try:
+            torch.onnx.export(
+                self,
+                (obs, time_step),
+                os.path.join(path, filename),
+                export_params=True,
+                opset_version=11,
+                verbose=self.verbose,
+                input_names=["obs", "time_step"],
+                output_names=[
+                    "actions",
+                    "joint_pos",
+                    "joint_vel",
+                    "body_pos_w",
+                    "body_quat_w",
+                    "body_lin_vel_w",
+                    "body_ang_vel_w",
+                ],
+                dynamic_axes={},
+                dynamo=False,
+            )
+        finally:
+            if was_training:
+                self.train()
 
 
 def list_to_csv_str(arr, *, decimals: int = 3, delimiter: str = ",") -> str:

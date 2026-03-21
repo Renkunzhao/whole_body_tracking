@@ -1,4 +1,5 @@
 import os
+import warnings
 
 from rsl_rl.env import VecEnv
 from rsl_rl.runners.on_policy_runner import OnPolicyRunner
@@ -16,9 +17,12 @@ class MyOnPolicyRunner(OnPolicyRunner):
         if self.logger_type in ["wandb"]:
             policy_path = path.split("model")[0]
             filename = policy_path.split("/")[-2] + ".onnx"
-            export_policy_as_onnx(self.alg.policy, normalizer=self.obs_normalizer, path=policy_path, filename=filename)
-            attach_onnx_metadata(self.env.unwrapped, wandb.run.name, path=policy_path, filename=filename)
-            wandb.save(policy_path + filename, base_path=os.path.dirname(policy_path))
+            try:
+                export_policy_as_onnx(self.alg.policy, normalizer=self.obs_normalizer, path=policy_path, filename=filename)
+                attach_onnx_metadata(self.env.unwrapped, wandb.run.name, path=policy_path, filename=filename)
+                wandb.save(policy_path + filename, base_path=os.path.dirname(policy_path))
+            except Exception as exc:
+                warnings.warn(f"Skipping ONNX export for checkpoint '{path}' due to: {exc}")
 
 
 class MotionOnPolicyRunner(OnPolicyRunner):
@@ -34,11 +38,18 @@ class MotionOnPolicyRunner(OnPolicyRunner):
         if self.logger_type in ["wandb"]:
             policy_path = path.split("model")[0]
             filename = policy_path.split("/")[-2] + ".onnx"
-            export_motion_policy_as_onnx(
-                self.env.unwrapped, self.alg.policy, normalizer=self.obs_normalizer, path=policy_path, filename=filename
-            )
-            attach_onnx_metadata(self.env.unwrapped, wandb.run.name, path=policy_path, filename=filename)
-            wandb.save(policy_path + filename, base_path=os.path.dirname(policy_path))
+            try:
+                export_motion_policy_as_onnx(
+                    self.env.unwrapped,
+                    self.alg.policy,
+                    normalizer=self.obs_normalizer,
+                    path=policy_path,
+                    filename=filename,
+                )
+                attach_onnx_metadata(self.env.unwrapped, wandb.run.name, path=policy_path, filename=filename)
+                wandb.save(policy_path + filename, base_path=os.path.dirname(policy_path))
+            except Exception as exc:
+                warnings.warn(f"Skipping motion ONNX export for checkpoint '{path}' due to: {exc}")
 
             # link the artifact registry to this run
             if self.registry_name is not None:
