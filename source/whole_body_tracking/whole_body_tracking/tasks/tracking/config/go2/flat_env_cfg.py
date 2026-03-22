@@ -53,7 +53,7 @@ class Go2FlatEnvCfg(TrackingEnvCfg):
         self.events.physics_material.params['make_consistent'] = True
 
         self.rewards.motion_global_anchor_ori.weight = 1.5
-        self.rewards.motion_body_ang_vel.weight = 3.0
+        self.rewards.motion_body_ang_vel.weight = 2.0
         self.rewards.motion_body_ang_vel.params['std'] = 6.28
         # mjlab's Go2 setup keeps the self-collision cost effectively inactive for this task.
         # Penalizing all non-foot PhysX contacts is harsher and tends to make aerial phases too conservative.
