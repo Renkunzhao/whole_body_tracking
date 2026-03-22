@@ -28,6 +28,10 @@ def _apply_play_overrides(cfg: TrackingEnvCfg) -> TrackingEnvCfg:
     cfg.commands.motion.pose_range = {}
     cfg.commands.motion.velocity_range = {}
     cfg.commands.motion.sampling_mode = 'start'
+    cfg.commands.motion.debug_vis = False
+    cfg.scene.contact_forces.debug_vis = False
+    # Keep the play camera static so manual mouse control is not overridden by asset tracking.
+    cfg.viewer.origin_type = 'world'
     return cfg
 
 
@@ -62,8 +66,8 @@ class Go2FlatEnvCfg(TrackingEnvCfg):
             'contact_forces', body_names=list(GO2_NON_FOOT_CONTACT_BODY_NAMES)
         )
 
-        self.terminations.anchor_pos.params['threshold'] = 1.0
-        self.terminations.ee_body_pos.params['threshold'] = 1.0
+        self.terminations.anchor_pos.params['threshold'] = 0.5
+        self.terminations.ee_body_pos.params['threshold'] = 0.6
         self.terminations.ee_body_pos.params['body_names'] = list(GO2_FOOT_BODY_NAMES)
 
 
