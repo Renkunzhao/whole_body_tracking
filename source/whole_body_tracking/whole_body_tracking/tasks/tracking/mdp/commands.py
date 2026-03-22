@@ -287,6 +287,13 @@ class MotionCommand(CommandTerm):
             torch.cat([root_pos[env_ids], root_ori[env_ids], root_lin_vel[env_ids], root_ang_vel[env_ids]], dim=-1),
             env_ids=env_ids,
         )
+        # Match mjlab's clear_state() after command resampling by clearing any
+        # stale actuator targets that could survive across resets.
+        self.robot.reset(env_ids)
+        zeros_target = torch.zeros((len(env_ids), self.robot.num_joints), device=self.device)
+        self.robot.set_joint_position_target(zeros_target, env_ids=env_ids)
+        self.robot.set_joint_velocity_target(zeros_target, env_ids=env_ids)
+        self.robot.set_joint_effort_target(zeros_target, env_ids=env_ids)
 
     def _update_command(self):
         self.time_steps += 1

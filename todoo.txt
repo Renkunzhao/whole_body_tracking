@@ -1,0 +1,5 @@
+先做一个 debug 版训练：
+把 push_robot = None，把 base_com randomization 去掉，同时把 pose_range、velocity_range、joint_position_range 都缩小很多。
+强化后半段采样：
+要么先直接试 sampling_mode = uniform，要么继续用 adaptive，但把 adaptive_alpha 提高到 0.01 或 0.02 这种量级。
+等你先把“第二次抬升”学出来以后，再逐步把这些 robustness randomization 一项一项加回去。
