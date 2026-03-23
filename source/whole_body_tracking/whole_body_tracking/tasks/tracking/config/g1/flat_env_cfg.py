@@ -12,6 +12,8 @@ class G1FlatEnvCfg(TrackingEnvCfg):
 
         self.scene.robot = G1_CYLINDER_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
         self.actions.joint_pos.scale = G1_ACTION_SCALE
+        self.actions.foot_contact.contact_body_names = ["left_ankle_roll_link", "right_ankle_roll_link"]
+        self.actions.foot_contact.contact_point_offsets_local = ((0.04, 0.0, -0.037), (0.04, 0.0, -0.037))
         self.commands.motion.anchor_body_name = "torso_link"
         self.commands.motion.body_names = [
             "pelvis",

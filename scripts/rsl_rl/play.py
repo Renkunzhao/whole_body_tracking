@@ -67,6 +67,16 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     """Play with RSL-RL agent."""
     agent_cfg: RslRlOnPolicyRunnerCfg = cli_args.parse_rsl_rl_cfg(args_cli.task, args_cli)
     env_cfg.scene.num_envs = args_cli.num_envs if args_cli.num_envs is not None else env_cfg.scene.num_envs
+    env_cfg.viewer.origin_type = "world"
+    env_cfg.viewer.asset_name = None
+    env_cfg.viewer.body_name = None
+    env_cfg.terminations.anchor_pos = None
+    env_cfg.terminations.anchor_ori = None
+    env_cfg.terminations.ee_body_pos = None
+    env_cfg.commands.motion.pose_range = {}
+    env_cfg.commands.motion.velocity_range = {}
+    env_cfg.commands.motion.joint_position_range = (0.0, 0.0)
+    env_cfg.commands.motion.sampling_mode = "start"
 
     # specify directory for logging experiments
     log_root_path = os.path.join("logs", "rsl_rl", agent_cfg.experiment_name)

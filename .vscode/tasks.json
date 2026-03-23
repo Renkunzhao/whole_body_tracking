@@ -117,7 +117,8 @@
         "python", "rsl_rl/play.py",
         "--task", "${input:Task}", 
         "--num_envs", "${input:num_envs}", 
-        "--wandb_path", "${input:wandb_path}"
+        "--wandb_path", "${input:wandb_path}",
+        // "env.actions.foot_contact.contact_enabled=true",
       ],
       "options": { "cwd": "${workspaceFolder}/scripts" },
       "problemMatcher": []
