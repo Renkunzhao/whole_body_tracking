@@ -80,14 +80,16 @@ simulation_app = app_launcher.app
 import torch
 
 import isaaclab.sim as sim_utils
-from isaaclab.assets import DeformableObject, DeformableObjectCfg, RigidObject, RigidObjectCfg
+from isaaclab.assets import DeformableObject, RigidObject, RigidObjectCfg
 from isaaclab.markers import VisualizationMarkers, VisualizationMarkersCfg
 from isaaclab.sim import SimulationContext
+from whole_body_tracking.utils.trampoline_deformable import (
+    TRAMPOLINE_MASS,
+    build_trampoline_kinematic_targets,
+    make_trampoline_cfg,
+)
 
-TRAMPOLINE_RADIUS = 1.5
-TRAMPOLINE_THICKNESS = 0.08
 TRAMPOLINE_HEIGHT = 0.75
-TRAMPOLINE_MASS = 1.0
 BALL_RADIUS = 0.18
 BALL_MASS = 6.0
 BALL_HEIGHT = 1.55
@@ -110,34 +112,12 @@ def design_scene(debug_vis: bool = True) -> dict[str, DeformableObject | RigidOb
     light_cfg = sim_utils.DomeLightCfg(intensity=3000.0, color=(0.8, 0.8, 0.8))
     light_cfg.func("/World/Light", light_cfg)
 
-    trampoline_cfg = DeformableObjectCfg(
-        prim_path="/World/Trampoline",
-        spawn=sim_utils.MeshCylinderCfg(
-            radius=TRAMPOLINE_RADIUS,
-            height=TRAMPOLINE_THICKNESS,
-            axis="Z",
-            mass_props=sim_utils.MassPropertiesCfg(mass=TRAMPOLINE_MASS),
-            deformable_props=sim_utils.DeformableBodyPropertiesCfg(
-                solver_position_iteration_count=24,
-                vertex_velocity_damping=0.05,
-                sleep_damping=1.0,
-                sleep_threshold=0.01,
-                settling_threshold=0.02,
-                self_collision=False,
-                simulation_hexahedral_resolution=args_cli.sim_resolution,
-                contact_offset=0.01,
-                rest_offset=0.0,
-            ),
-            visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.15, 0.35, 0.95), metallic=0.05),
-            physics_material=sim_utils.DeformableBodyMaterialCfg(
-                dynamic_friction=0.8,
-                youngs_modulus=args_cli.youngs_modulus,
-                poissons_ratio=0.35,
-                elasticity_damping=0.02,
-                damping_scale=1.0,
-            ),
-        ),
-        init_state=DeformableObjectCfg.InitialStateCfg(pos=(0.0, 0.0, TRAMPOLINE_HEIGHT)),
+    trampoline_cfg = make_trampoline_cfg(
+        "/World/Trampoline",
+        center_z=TRAMPOLINE_HEIGHT,
+        mass=TRAMPOLINE_MASS,
+        youngs_modulus=args_cli.youngs_modulus,
+        sim_resolution=args_cli.sim_resolution,
         debug_vis=debug_vis,
     )
     trampoline = DeformableObject(cfg=trampoline_cfg)
@@ -171,25 +151,11 @@ def build_trampoline_targets(
     trampoline: DeformableObject, pin_width: float
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Create kinematic targets that pin the outer rim of the trampoline."""
-    targets = trampoline.data.nodal_kinematic_target.clone()
-    targets[..., :3] = trampoline.data.default_nodal_state_w[..., :3]
-    targets[..., 3] = 1.0
-
-    nodal_pos = trampoline.data.default_nodal_state_w[..., :3]
-    center_xy = nodal_pos[..., :2].mean(dim=1, keepdim=True)
-    radial_distance = torch.linalg.vector_norm(nodal_pos[..., :2] - center_xy, dim=-1)
-
-    rim_radius = radial_distance.max(dim=1, keepdim=True).values
-    pin_threshold = torch.clamp(rim_radius - pin_width, min=0.0)
-    pinned_mask = radial_distance >= pin_threshold
-    center_node_ids = radial_distance.argmin(dim=1)
-
-    targets[..., 3] = torch.where(
-        pinned_mask,
-        torch.zeros_like(targets[..., 3]),
-        torch.ones_like(targets[..., 3]),
+    return build_trampoline_kinematic_targets(
+        trampoline.data.default_nodal_state_w,
+        trampoline.data.nodal_kinematic_target,
+        pin_width=pin_width,
     )
-    return targets, pinned_mask, center_node_ids
 
 
 def reset_scene(

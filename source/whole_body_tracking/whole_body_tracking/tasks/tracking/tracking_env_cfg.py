@@ -315,7 +315,9 @@ class TrackingEnvCfg(ManagerBasedRLEnvCfg):
         # simulation settings
         self.sim.dt = 0.005
         self.sim.render_interval = self.decimation
-        self.sim.physics_material = self.scene.terrain.physics_material
+        terrain = getattr(self.scene, "terrain", None)
+        if terrain is not None:
+            self.sim.physics_material = terrain.physics_material
         self.sim.physx.gpu_max_rigid_patch_count = 10 * 2**15
         # viewer settings
         self.viewer.eye = (1.5, 1.5, 1.5)

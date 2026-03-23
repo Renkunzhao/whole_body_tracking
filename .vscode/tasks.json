@@ -33,7 +33,8 @@
       "options": [
         "Tracking-Flat-G1-v0",
         "Tracking-Flat-G1-Wo-State-Estimation-v0",
-        "Tracking-Flat-G1-Low-Freq-v0"
+        "Tracking-Flat-G1-Low-Freq-v0",
+        "Tracking-Trampoline-G1-v0"
       ]
     },
     {
