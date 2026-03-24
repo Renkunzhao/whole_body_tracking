@@ -10,24 +10,7 @@ from __future__ import annotations
 # Launch Isaac Sim Simulator first.
 
 import argparse
-import pathlib
-import sys
-
 import numpy as np
-
-
-def _add_repo_source_to_path():
-    for parent in pathlib.Path(__file__).resolve().parents:
-        candidate = parent / "source" / "whole_body_tracking"
-        if candidate.is_dir():
-            candidate_str = str(candidate)
-            if candidate_str not in sys.path:
-                sys.path.insert(0, candidate_str)
-            return
-
-
-_add_repo_source_to_path()
-
 from isaaclab.app import AppLauncher
 
 parser = argparse.ArgumentParser(description="Replay a Go2 motion CSV and export it as a tracking .npz file.")
