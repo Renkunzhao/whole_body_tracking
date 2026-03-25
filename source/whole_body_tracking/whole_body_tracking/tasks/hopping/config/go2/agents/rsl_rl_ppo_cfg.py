@@ -44,3 +44,8 @@ class Go2HoppingFlatPPORunnerCfg(RslRlOnPolicyRunnerCfg):
             mirror_loss_coeff=1.0,
         ),
     )
+
+
+@configclass
+class Go2HoppingTrampolinePPORunnerCfg(Go2HoppingFlatPPORunnerCfg):
+    experiment_name = "go2_jump_trampoline"

@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 
 import isaaclab.sim as sim_utils
+from isaaclab.assets import DeformableObjectCfg
 from isaaclab.envs import DirectRLEnvCfg
 from isaaclab.envs.common import ViewerCfg
 from isaaclab.scene import InteractiveSceneCfg
@@ -20,6 +21,13 @@ from whole_body_tracking.robots.go2 import (
     GO2_TRACKING_ANCHOR_BODY_NAME,
 )
 from whole_body_tracking.robots.go2_hopping import GO2_HOPPING_ACTION_SCALE_MAP, GO2_HOPPING_CFG
+from whole_body_tracking.utils.trampoline_deformable import (
+    TRAMPOLINE_PIN_WIDTH,
+    TRAMPOLINE_RADIUS,
+    TRAMPOLINE_THICKNESS,
+    TRAMPOLINE_TOP_Z,
+    make_trampoline_cfg,
+)
 
 
 def _ordered_action_scale(action_scale_map: dict[str, float]) -> tuple[float, ...]:
@@ -46,6 +54,7 @@ class CommandsCfg:
     num_commands = 4
     resampling_time = 5.0
     heading_command = False
+    command_xy_deadzone = 0.1
     ranges: CommandRangesCfg = CommandRangesCfg()
 
 
@@ -190,7 +199,7 @@ class Go2HoppingFlatEnvCfg(DirectRLEnvCfg):
             gpu_max_rigid_contact_count=2**23,
         ),
     )
-    terrain = TerrainImporterCfg(
+    terrain: TerrainImporterCfg | None = TerrainImporterCfg(
         prim_path="/World/ground",
         terrain_type="plane",
         collision_group=-1,
@@ -203,6 +212,14 @@ class Go2HoppingFlatEnvCfg(DirectRLEnvCfg):
         ),
         debug_vis=False,
     )
+    trampoline: DeformableObjectCfg | None = None
+    trampoline_radius = TRAMPOLINE_RADIUS
+    trampoline_pin_width = TRAMPOLINE_PIN_WIDTH
+    trampoline_thickness = TRAMPOLINE_THICKNESS
+    trampoline_surface_height = TRAMPOLINE_TOP_Z
+    trampoline_robot_clearance = 0.0
+    usable_radius = TRAMPOLINE_RADIUS
+    use_plain_trampoline_visual = False
     scene: InteractiveSceneCfg = InteractiveSceneCfg(num_envs=4096, env_spacing=3.0, replicate_physics=True)
     robot = GO2_HOPPING_CFG.replace(prim_path="/World/envs/env_.*/Robot")
     action_scale = _ordered_action_scale(GO2_HOPPING_ACTION_SCALE_MAP)
@@ -233,7 +250,6 @@ def _apply_play_overrides(cfg: Go2HoppingFlatEnvCfg) -> Go2HoppingFlatEnvCfg:
     cfg.episode_length_s = float(1.0e9)
     cfg.noise.add_noise = False
     cfg.domain_rand.push_robots = False
-    # Follow the robot during play so the hopping motion stays centered in view.
     cfg.viewer.eye = (1.8, 1.8, 1.2)
     cfg.viewer.lookat = (0.0, 0.0, 0.3)
     cfg.viewer.origin_type = "asset_root"
@@ -244,6 +260,23 @@ def _apply_play_overrides(cfg: Go2HoppingFlatEnvCfg) -> Go2HoppingFlatEnvCfg:
 
 def go2_hopping_flat_env_cfg() -> Go2HoppingFlatEnvCfg:
     cfg = Go2HoppingFlatEnvCfg()
+    if _is_play_mode():
+        cfg = _apply_play_overrides(cfg)
+    return cfg
+
+
+def go2_hopping_trampoline_env_cfg() -> Go2HoppingFlatEnvCfg:
+    cfg = Go2HoppingFlatEnvCfg()
+    cfg.terrain = None
+    cfg.scene.replicate_physics = False
+    cfg.scene.env_spacing = max(float(cfg.scene.env_spacing), 2.0 * float(cfg.trampoline_radius) + 2.0)
+    cfg.trampoline = make_trampoline_cfg(
+        "/World/envs/env_.*/Trampoline",
+        center_z=float(cfg.trampoline_surface_height) - 0.5 * float(cfg.trampoline_thickness),
+        debug_vis=False,
+    )
+    cfg.usable_radius = float(cfg.trampoline_radius)
+    cfg.use_plain_trampoline_visual = False
     if _is_play_mode():
         cfg = _apply_play_overrides(cfg)
     return cfg

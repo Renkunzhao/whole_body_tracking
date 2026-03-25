@@ -35,6 +35,12 @@ parser.add_argument(
 parser.add_argument("--num_envs", type=int, default=None, help="Number of environments to simulate.")
 parser.add_argument("--task", type=str, default=None, help="Name of the task.")
 parser.add_argument("--motion_file", type=str, default=None, help="Path to the motion file.")
+parser.add_argument(
+    "--checkpoint_path",
+    type=str,
+    default=None,
+    help="Path to a checkpoint file. Can be absolute or relative to the workspace.",
+)
 parser.add_argument("--command_vx", type=float, default=None, help="Fixed commanded forward velocity for hopping play.")
 parser.add_argument("--command_vy", type=float, default=None, help="Fixed commanded lateral velocity for hopping play.")
 parser.add_argument("--command_yaw", type=float, default=None, help="Fixed commanded yaw rate for hopping play.")
@@ -147,9 +153,15 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     log_root_path = os.path.abspath(log_root_path)
 
     wandb_run = None
-    run_path_for_metadata = args_cli.wandb_path if args_cli.wandb_path else "none"
+    run_path_for_metadata = "none"
     if args_cli.wandb_path:
         resume_path, run_path_for_metadata, wandb_run = _download_wandb_checkpoint(args_cli.wandb_path)
+    elif args_cli.checkpoint_path:
+        resume_path = os.path.abspath(args_cli.checkpoint_path)
+        if not os.path.isfile(resume_path):
+            raise FileNotFoundError(f"Checkpoint file not found: {resume_path}")
+        run_path_for_metadata = resume_path
+        print(f"[INFO]: Loading model checkpoint from: {resume_path}")
     else:
         print(f"[INFO] Loading experiment from directory: {log_root_path}")
         resume_path = get_checkpoint_path(log_root_path, agent_cfg.load_run, agent_cfg.load_checkpoint)

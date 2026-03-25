@@ -8,7 +8,7 @@ import gymnasium as gym
 import torch
 
 import isaaclab.sim as sim_utils
-from isaaclab.assets import Articulation
+from isaaclab.assets import Articulation, DeformableObject
 from isaaclab.envs import DirectRLEnv
 from isaaclab.envs.mdp.events import randomize_actuator_gains, randomize_rigid_body_mass
 from isaaclab.managers import EventTermCfg, ManagerTermBase, SceneEntityCfg
@@ -19,6 +19,13 @@ from whole_body_tracking.robots.go2 import GO2_CSV_JOINT_NAMES
 from whole_body_tracking.tasks.hopping.config.go2.flat_env_cfg import Go2HoppingFlatEnvCfg
 from whole_body_tracking.tasks.hopping.symmetry import GO2_JUMP_ACTION_PERMUTATION, GO2_JUMP_OBS_PERMUTATION
 from whole_body_tracking.tasks.tracking.mdp.events import randomize_rigid_body_com
+from whole_body_tracking.utils.trampoline_deformable import (
+    build_trampoline_kinematic_targets,
+    build_trampoline_visual_translate_ops,
+    reset_deformable_trampoline,
+    trampoline_center_heights,
+    update_trampoline_visual_height,
+)
 
 
 def _invoke_randomization_term(term, env, env_ids, **kwargs):
@@ -67,6 +74,8 @@ class Go2HoppingEnv(DirectRLEnv):
         self._action_scale = torch.tensor(self.cfg.action_scale, device=self.device, dtype=torch.float).view(1, -1)
         if self._action_scale.shape[-1] != self._action_dim:
             raise RuntimeError("Configured action scale does not match canonical Go2 joint order length.")
+        self._command_xy_deadzone = float(self.cfg.commands.command_xy_deadzone)
+        self._has_trampoline = self.cfg.trampoline is not None
         self._foot_body_names = tuple(self.cfg.foot_body_names)
         self._penalized_contact_body_names = tuple(self.cfg.penalized_contact_body_names)
         self._termination_body_names = tuple(self.cfg.termination_body_names)
@@ -159,6 +168,11 @@ class Go2HoppingEnv(DirectRLEnv):
         )
         self._term_base_contact = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
         self._term_back_lie = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+        self._term_out_of_trampoline = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+        self._trampoline_targets: torch.Tensor | None = None
+        self._trampoline_pinned_mask: torch.Tensor | None = None
+        self._trampoline_center_node_ids: torch.Tensor | None = None
+        self._trampoline_visual_translate_ops = None
 
         self._default_dof_pos = self._robot.data.default_joint_pos[:, self._canonical_joint_ids].clone()
         self._default_joint_pd_target = self._default_dof_pos.clone()
@@ -169,6 +183,14 @@ class Go2HoppingEnv(DirectRLEnv):
         self._command_resample_interval = int(self.cfg.commands.resampling_time / self.step_dt)
         self._push_interval = math.ceil(self.cfg.domain_rand.push_interval_s / self.step_dt)
 
+        if self._has_trampoline:
+            self._trampoline_targets, self._trampoline_pinned_mask, self._trampoline_center_node_ids = build_trampoline_kinematic_targets(
+                self._trampoline.data.default_nodal_state_w,
+                self._trampoline.data.nodal_kinematic_target,
+                pin_width=self.cfg.trampoline_pin_width,
+            )
+            reset_deformable_trampoline(self._trampoline, self._trampoline_targets)
+
         self._apply_startup_randomization(self._all_env_ids)
         self.scene.write_data_to_sim()
         self.sim.forward()
@@ -176,14 +198,45 @@ class Go2HoppingEnv(DirectRLEnv):
         self._update_state_buffers()
 
     def _setup_scene(self):
+        self._terrain = None
+        self._trampoline = None
+
         self._robot = Articulation(self.cfg.robot)
         self.scene.articulations["robot"] = self._robot
         self._contact_sensor = ContactSensor(self.cfg.contact_sensor)
         self.scene.sensors["contact_sensor"] = self._contact_sensor
-        self.cfg.terrain.num_envs = self.scene.cfg.num_envs
-        self.cfg.terrain.env_spacing = self.scene.cfg.env_spacing
-        self._terrain = self.cfg.terrain.class_type(self.cfg.terrain)
+
+        if self.cfg.terrain is not None:
+            self.cfg.terrain.num_envs = self.scene.cfg.num_envs
+            self.cfg.terrain.env_spacing = self.scene.cfg.env_spacing
+            self._terrain = self.cfg.terrain.class_type(self.cfg.terrain)
+        if self.cfg.trampoline is not None:
+            self._trampoline = DeformableObject(self.cfg.trampoline)
+            self.scene.deformable_objects["trampoline"] = self._trampoline
+
         self.scene.clone_environments(copy_from_source=False)
+        if self.cfg.trampoline is not None and self.cfg.use_plain_trampoline_visual:
+            visual_thickness = max(0.01, 0.25 * float(self.cfg.trampoline_thickness))
+            visual_cfg = sim_utils.CylinderCfg(
+                radius=float(self.cfg.trampoline_radius),
+                height=visual_thickness,
+                axis="Z",
+                visual_material=sim_utils.PreviewSurfaceCfg(
+                    diffuse_color=(0.55, 0.55, 0.55),
+                    emissive_color=(0.0, 0.0, 0.0),
+                    roughness=1.0,
+                    metallic=0.0,
+                ),
+            )
+            visual_cfg.func(
+                "/World/envs/env_.*/TrampolineVisual",
+                visual_cfg,
+                translation=(0.0, 0.0, float(self.cfg.trampoline_surface_height) - 0.5 * visual_thickness),
+            )
+            self._trampoline_visual_translate_ops = build_trampoline_visual_translate_ops(self.scene.cfg.num_envs)
+        if not self.scene.cfg.replicate_physics:
+            self.scene.filter_collisions()
+
         light_cfg = sim_utils.DomeLightCfg(intensity=2000.0, color=(0.75, 0.75, 0.75))
         light_cfg.func("/World/Light", light_cfg)
 
@@ -204,6 +257,8 @@ class Go2HoppingEnv(DirectRLEnv):
             delayed_actions = self.actions * self._action_scale
         joint_targets = delayed_actions + self._default_dof_pos + self._motor_zero_offsets
         self._robot.set_joint_position_target(joint_targets, joint_ids=self._canonical_joint_ids)
+        if self._has_trampoline and self._trampoline_targets is not None:
+            self._trampoline.write_nodal_kinematic_target_to_sim(self._trampoline_targets)
 
     def reset(self, seed: int | None = None, options: dict | None = None):
         if seed is not None:
@@ -346,10 +401,17 @@ class Go2HoppingEnv(DirectRLEnv):
             torch.norm(self._contact_forces[:, self._contact_non_foot_body_ids, :], dim=-1) > 1.0, dim=1
         )
         back_lie = (self._robot.data.projected_gravity_b[:, 2] > 0.0) & non_foot_contact & ~base_contact
+        if self._has_trampoline:
+            base_xy = self._robot.data.root_pos_w[:, :2]
+            trampoline_center_xy = self.scene.env_origins[:, :2]
+            out_of_trampoline = torch.linalg.vector_norm(base_xy - trampoline_center_xy, dim=1) > self.cfg.usable_radius
+        else:
+            out_of_trampoline = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
         self._term_base_contact = base_contact
         self._term_back_lie = back_lie
+        self._term_out_of_trampoline = out_of_trampoline
         time_out = self.episode_length_buf > self.max_episode_length
-        return base_contact | back_lie, time_out
+        return base_contact | back_lie | out_of_trampoline, time_out
 
     def _reset_idx(self, env_ids: Sequence[int]):
         if env_ids is None:
@@ -362,6 +424,8 @@ class Go2HoppingEnv(DirectRLEnv):
         super()._reset_idx(env_ids)
         self._robot.reset(env_ids)
         self._contact_sensor.reset(env_ids)
+        if self._has_trampoline and self._trampoline_targets is not None:
+            reset_deformable_trampoline(self._trampoline, self._trampoline_targets, env_ids=env_ids)
 
         if (
             self._manual_command is None
@@ -388,7 +452,9 @@ class Go2HoppingEnv(DirectRLEnv):
         joint_pos = self._default_dof_pos[env_ids] + self._sample_uniform(-0.1, 0.1, (len(env_ids), self._action_dim))
         joint_vel = torch.zeros(len(env_ids), self._action_dim, dtype=torch.float, device=self.device)
         default_root_state = self._robot.data.default_root_state[env_ids].clone()
-        default_root_state[:, :3] += self._terrain.env_origins[env_ids]
+        default_root_state[:, :3] += self.scene.env_origins[env_ids]
+        if self._has_trampoline:
+            default_root_state[:, 2] += self.cfg.trampoline_surface_height + self.cfg.trampoline_robot_clearance
 
         self._robot.write_root_pose_to_sim(default_root_state[:, :7], env_ids)
         self._robot.write_root_velocity_to_sim(default_root_state[:, 7:], env_ids)
@@ -412,6 +478,7 @@ class Go2HoppingEnv(DirectRLEnv):
         extras["max_command_x"] = self.cfg.commands.ranges.lin_vel_x[1]
         extras["term_base_contact"] = torch.count_nonzero(self._term_base_contact[env_ids]).item()
         extras["term_back_lie"] = torch.count_nonzero(self._term_back_lie[env_ids]).item()
+        extras["term_out_of_trampoline"] = torch.count_nonzero(self._term_out_of_trampoline[env_ids]).item()
         extras["term_terminated"] = torch.count_nonzero(self.reset_terminated[env_ids]).item()
         extras["term_time_out"] = torch.count_nonzero(self.reset_time_outs[env_ids]).item()
         self.extras["episode"] = extras
@@ -448,7 +515,7 @@ class Go2HoppingEnv(DirectRLEnv):
             self.cfg.commands.ranges.ang_vel_yaw[0], self.cfg.commands.ranges.ang_vel_yaw[1], (len(env_ids),)
         )
         self._commands[env_ids, 3] = 0.0
-        moving = torch.norm(self._commands[env_ids, :2], dim=1) > 0.2
+        moving = torch.norm(self._commands[env_ids, :2], dim=1) > self._command_xy_deadzone
         self._commands[env_ids, :2] *= moving.unsqueeze(1)
 
     def set_manual_command(
@@ -472,7 +539,7 @@ class Go2HoppingEnv(DirectRLEnv):
         if self._manual_command is None or len(env_ids) == 0:
             return
         command = self._manual_command.clone()
-        if torch.norm(command[:2]) <= 0.2:
+        if torch.norm(command[:2]) <= self._command_xy_deadzone:
             command[:2] = 0.0
         self._commands[env_ids] = command.unsqueeze(0)
 
@@ -626,6 +693,11 @@ class Go2HoppingEnv(DirectRLEnv):
         self._contact_forces = self._contact_sensor.data.net_forces_w
         roll, pitch, yaw = euler_xyz_from_quat(self._robot.data.root_link_state_w[:, 3:7])
         self._base_euler_xyz = self._wrap_euler(torch.stack((roll, pitch, yaw), dim=1))
+        if self._has_trampoline and self._trampoline_center_node_ids is not None:
+            self._measured_heights = trampoline_center_heights(self._trampoline, self._trampoline_center_node_ids)
+            update_trampoline_visual_height(self.scene.env_origins, self._trampoline_visual_translate_ops, self._measured_heights)
+        else:
+            self._measured_heights.zero_()
 
     def _build_noise_scale_vec(self) -> torch.Tensor:
         noise = torch.zeros(self._policy_frame_dim, dtype=torch.float, device=self.device)
@@ -676,7 +748,7 @@ class Go2HoppingEnv(DirectRLEnv):
         return names
 
     def get_export_metadata(self, run_path: str) -> dict[str, object]:
-        return {
+        metadata = {
             "run_path": run_path,
             "joint_names": list(self._canonical_joint_names),
             "joint_stiffness": self._robot.data.joint_stiffness[0, self._canonical_joint_ids].cpu().tolist(),
@@ -693,6 +765,14 @@ class Go2HoppingEnv(DirectRLEnv):
             "symmetry_observation_frame_permutation": list(GO2_JUMP_OBS_PERMUTATION),
             "symmetry_action_permutation": list(GO2_JUMP_ACTION_PERMUTATION),
         }
+        if self._has_trampoline:
+            metadata.update({
+                "trampoline_radius": self.cfg.trampoline_radius,
+                "trampoline_pin_width": self.cfg.trampoline_pin_width,
+                "trampoline_surface_height": self.cfg.trampoline_surface_height,
+                "usable_radius": self.cfg.usable_radius,
+            })
+        return metadata
 
     def _reward_jump(self) -> torch.Tensor:
         contact = self._contact_forces[:, self._contact_foot_body_ids, 2] > 5.0
@@ -703,7 +783,7 @@ class Go2HoppingEnv(DirectRLEnv):
             & (contact[:, 2] == contact[:, 3])
             & (contact[:, 3] == stance_mask[:, 0].bool())
         )
-        return jump.float() * (torch.norm(self._commands[:, :2], dim=1) > 0.2)
+        return jump.float() * self._command_xy_is_moving()
 
     def _reward_default_hip_pos(self) -> torch.Tensor:
         joint_pos = self._joint_pos()
@@ -716,11 +796,11 @@ class Go2HoppingEnv(DirectRLEnv):
         return torch.exp(-joint_diff * 4.0)
 
     def _reward_feet_clearance(self) -> torch.Tensor:
-        feet_height = self._robot.data.body_pos_w[:, self._foot_body_ids, 2] - 0.02
+        feet_height = self._robot.data.body_pos_w[:, self._foot_body_ids, 2] - self._measured_heights - 0.02
         swing_mask = 1.0 - self._get_gait_phase()
         reward = torch.clamp(feet_height, min=0.0, max=0.05)
         reward = torch.sum(reward * swing_mask[:, :1].repeat(1, 4), dim=1)
-        return reward * (torch.norm(self._commands[:, :2], dim=1) > 0.2)
+        return reward * self._command_xy_is_moving()
 
     def _reward_lin_vel_z(self) -> torch.Tensor:
         return torch.exp(-torch.abs(self._robot.data.root_lin_vel_b[:, 2]))
@@ -734,7 +814,7 @@ class Go2HoppingEnv(DirectRLEnv):
     def _reward_base_height(self) -> torch.Tensor:
         base_height = torch.mean(self._robot.data.root_link_state_w[:, 2:3] - self._measured_heights, dim=1)
         return torch.exp(-torch.abs(base_height - self.cfg.rewards.base_height_target) * 10.0) * (
-            torch.norm(self._commands[:, :2], dim=1) < 0.2
+            ~self._command_xy_is_moving()
         )
 
     def _reward_torques(self) -> torch.Tensor:
@@ -761,10 +841,10 @@ class Go2HoppingEnv(DirectRLEnv):
     def _reward_tracking_lin_vel(self) -> torch.Tensor:
         lin_vel_error = torch.sum(torch.square(self._commands[:, :2] - self._robot.data.root_lin_vel_b[:, :2]), dim=1)
         reward = torch.exp(-lin_vel_error / self.cfg.rewards.tracking_sigma) * (
-            torch.norm(self._commands[:, :2], dim=1) > 0.2
+            self._command_xy_is_moving()
         )
         reward += torch.exp(-torch.norm(self._robot.data.root_lin_vel_b[:, :2], dim=1) / self.cfg.rewards.tracking_sigma) * (
-            torch.norm(self._commands[:, :2], dim=1) < 0.2
+            ~self._command_xy_is_moving()
         )
         return reward
 
@@ -783,7 +863,7 @@ class Go2HoppingEnv(DirectRLEnv):
         first_contact = (self._feet_air_time > 0.0) * contact_filt
         self._feet_air_time += self.step_dt
         reward = torch.sum((self._feet_air_time - 0.5) * first_contact.float(), dim=1)
-        reward *= torch.norm(self._commands[:, :2], dim=1) > 0.1
+        reward *= self._command_xy_is_moving()
         self._feet_air_time *= (~contact_filt).float()
         return reward
 
@@ -830,6 +910,9 @@ class Go2HoppingEnv(DirectRLEnv):
     ) -> torch.Tensor:
         sample_device = self.device if device is None else device
         return low + (high - low) * torch.rand(shape, device=sample_device)
+
+    def _command_xy_is_moving(self) -> torch.Tensor:
+        return torch.norm(self._commands[:, :2], dim=1) > self._command_xy_deadzone
 
     def _to_tensor(self, ids: Sequence[int]) -> torch.Tensor:
         return torch.tensor(list(ids), dtype=torch.long, device=self.device)

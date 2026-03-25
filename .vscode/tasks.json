@@ -2,12 +2,12 @@
   "version": "2.0.0",
   "tasks": [
     {
-      "label": "Train Go2 Tracking",
+      "label": "Train / Right Flip",
       "type": "shell",
       "command": "bash",
       "args": [
         "-lc",
-        "source /home/yjiang/miniconda3/etc/profile.d/conda.sh && conda activate env_isaaclab && /home/yjiang/Documents/Robotics/IsaacLab/isaaclab.sh -p scripts/rsl_rl/train.py --task Tracking-Flat-Go2-No-State-Estimation-v0 --registry_name jiangyidong9343-university-of-wisconsin-madison-org/wandb-registry-motions/go2_sideflip_right_fps50 --num_envs ${input:trainNumEnvs} --max_iterations ${input:trainMaxIterations} --headless --logger wandb --log_project_name go2_tracking --run_name ${input:trainRunName}"
+        "conda run --no-capture-output -n ${input:condaEnvName} python scripts/rsl_rl/train.py --task Tracking-Flat-Go2-No-State-Estimation-v0 --registry_name ${input:registryName} --num_envs ${input:rightFlipNumEnvs} --max_iterations ${input:rightFlipMaxIterations} --headless --logger wandb --log_project_name go2_tracking --run_name ${input:rightFlipRunName}"
       ],
       "options": {
         "cwd": "${workspaceFolder}"
@@ -20,12 +20,12 @@
       "problemMatcher": []
     },
     {
-      "label": "Play Go2 Checkpoint",
+      "label": "Play / Right Flip",
       "type": "shell",
       "command": "bash",
       "args": [
         "-lc",
-        "source /home/yjiang/miniconda3/etc/profile.d/conda.sh && conda activate env_isaaclab && /home/yjiang/Documents/Robotics/IsaacLab/isaaclab.sh -p scripts/rsl_rl/play.py --task Tracking-Flat-Go2-No-State-Estimation-v0 --load_run ${input:loadRun} --checkpoint ${input:checkpointName} --motion_file ${workspaceFolder}/artifacts/go2_sideflip_right_fps50:v0/motion.npz --num_envs ${input:playNumEnvs}"
+        "conda run --no-capture-output -n ${input:condaEnvName} python scripts/rsl_rl/play.py --task Tracking-Flat-Go2-No-State-Estimation-v0 --checkpoint_path ${input:rightFlipCheckpointPath} --motion_file ${input:rightFlipMotionFile} --num_envs ${input:rightFlipPlayNumEnvs}"
       ],
       "options": {
         "cwd": "${workspaceFolder}"
@@ -38,12 +38,66 @@
       "problemMatcher": []
     },
     {
-      "label": "Measure Go2 Checkpoint Height",
+      "label": "Train / Hopping Flat",
       "type": "shell",
       "command": "bash",
       "args": [
         "-lc",
-        "source /home/yjiang/miniconda3/etc/profile.d/conda.sh && conda activate env_isaaclab && /home/yjiang/Documents/Robotics/IsaacLab/isaaclab.sh -p scripts/rsl_rl/measure_base_height.py --task Tracking-Flat-Go2-No-State-Estimation-v0 --load_run ${input:loadRun} --checkpoint ${input:checkpointName} --motion_file ${workspaceFolder}/artifacts/go2_sideflip_right_fps50:v0/motion.npz --num_envs ${input:measureNumEnvs} --headless"
+        "conda run --no-capture-output -n ${input:condaEnvName} python scripts/rsl_rl/train.py --task Hopping-Flat-Go2-v0 --num_envs ${input:hoppingFlatNumEnvs} --max_iterations ${input:hoppingFlatMaxIterations} --headless --logger wandb --log_project_name go2_hopping --run_name ${input:hoppingFlatRunName}"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "focus": true
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Play / Hopping Flat",
+      "type": "shell",
+      "command": "bash",
+      "args": [
+        "-lc",
+        "conda run --no-capture-output -n ${input:condaEnvName} python scripts/rsl_rl/play.py --task Hopping-Flat-Go2-v0 --checkpoint_path ${input:hoppingFlatCheckpointPath} --num_envs ${input:hoppingFlatPlayNumEnvs} --command_vx ${input:hoppingPlayCommandVx} --command_vy ${input:hoppingPlayCommandVy} --command_yaw ${input:hoppingPlayCommandYaw}"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "focus": true
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Train / Hopping Trampoline",
+      "type": "shell",
+      "command": "bash",
+      "args": [
+        "-lc",
+        "conda run --no-capture-output -n ${input:condaEnvName} python scripts/rsl_rl/train.py --task Hopping-Trampoline-Go2-v0 --num_envs ${input:hoppingTrampolineNumEnvs} --max_iterations ${input:hoppingTrampolineMaxIterations} --headless --logger wandb --log_project_name go2_trampoline --run_name ${input:hoppingTrampolineRunName}"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "focus": true
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Play / Hopping Trampoline",
+      "type": "shell",
+      "command": "bash",
+      "args": [
+        "-lc",
+        "conda run --no-capture-output -n ${input:condaEnvName} python scripts/rsl_rl/play.py --task Hopping-Trampoline-Go2-v0 --checkpoint_path ${input:hoppingTrampolineCheckpointPath} --num_envs ${input:hoppingTrampolinePlayNumEnvs} --command_vx ${input:hoppingPlayCommandVx} --command_vy ${input:hoppingPlayCommandVy} --command_yaw ${input:hoppingPlayCommandYaw}"
       ],
       "options": {
         "cwd": "${workspaceFolder}"
@@ -58,46 +112,130 @@
   ],
   "inputs": [
     {
-      "id": "trainRunName",
+      "id": "condaEnvName",
       "type": "promptString",
-      "description": "wandb run name for training",
+      "description": "conda environment name",
+      "default": "env_isaaclab232"
+    },
+    {
+      "id": "registryName",
+      "type": "promptString",
+      "description": "wandb registry motion name",
+      "default": "your-org/wandb-registry-motions/go2_sideflip_right_fps50"
+    },
+    {
+      "id": "rightFlipRunName",
+      "type": "promptString",
+      "description": "wandb run name for right flip training",
       "default": "go2_sideflip_right_fps50_no_se_4096env_10k_height_r4_tighter_z"
     },
     {
-      "id": "trainNumEnvs",
+      "id": "rightFlipNumEnvs",
       "type": "promptString",
-      "description": "number of training environments",
+      "description": "number of environments for right flip training",
       "default": "4096"
     },
     {
-      "id": "trainMaxIterations",
+      "id": "rightFlipMaxIterations",
       "type": "promptString",
-      "description": "maximum PPO iterations",
+      "description": "maximum PPO iterations for right flip training",
       "default": "10000"
     },
     {
-      "id": "loadRun",
+      "id": "rightFlipCheckpointPath",
       "type": "promptString",
-      "description": "log directory name under logs/rsl_rl/go2_tracking",
-      "default": "2026-03-23_11-43-16_go2_sideflip_right_fps50_no_se_4096env_10k_height_r4_tighter_z"
+      "description": "right flip checkpoint path relative to workspace",
+      "default": "logs/rsl_rl/go2_tracking/2026-03-24_16-54-05_go2_sideflip_right_fps50_no_se_4096env_5k_232/model_3500.pt"
     },
     {
-      "id": "checkpointName",
+      "id": "rightFlipMotionFile",
       "type": "promptString",
-      "description": "checkpoint filename",
-      "default": "model_3500.pt"
+      "description": "right flip motion file path relative to workspace",
+      "default": "artifacts/go2_sideflip_right_fps50:v0/motion.npz"
     },
     {
-      "id": "playNumEnvs",
+      "id": "rightFlipPlayNumEnvs",
       "type": "promptString",
-      "description": "number of environments for play",
+      "description": "number of environments for right flip play",
       "default": "1"
     },
     {
-      "id": "measureNumEnvs",
+      "id": "hoppingFlatRunName",
       "type": "promptString",
-      "description": "number of environments for measuring base height",
+      "description": "wandb run name for flat hopping training",
+      "default": "go2_hopping_flat_4096env_1500it"
+    },
+    {
+      "id": "hoppingFlatNumEnvs",
+      "type": "promptString",
+      "description": "number of environments for flat hopping training",
+      "default": "4096"
+    },
+    {
+      "id": "hoppingFlatMaxIterations",
+      "type": "promptString",
+      "description": "maximum PPO iterations for flat hopping training",
+      "default": "1500"
+    },
+    {
+      "id": "hoppingFlatCheckpointPath",
+      "type": "promptString",
+      "description": "flat hopping checkpoint path relative to workspace",
+      "default": "logs/rsl_rl/go2_jump/2026-03-25_02-25-51/model_300.pt"
+    },
+    {
+      "id": "hoppingFlatPlayNumEnvs",
+      "type": "promptString",
+      "description": "number of environments for flat hopping play",
       "default": "1"
+    },
+    {
+      "id": "hoppingTrampolineRunName",
+      "type": "promptString",
+      "description": "wandb run name for trampoline hopping training",
+      "default": "go2_hopping_trampoline_4096env_5000it"
+    },
+    {
+      "id": "hoppingTrampolineNumEnvs",
+      "type": "promptString",
+      "description": "number of environments for trampoline hopping training",
+      "default": "4096"
+    },
+    {
+      "id": "hoppingTrampolineMaxIterations",
+      "type": "promptString",
+      "description": "maximum PPO iterations for trampoline hopping training",
+      "default": "5000"
+    },
+    {
+      "id": "hoppingTrampolineCheckpointPath",
+      "type": "promptString",
+      "description": "trampoline hopping checkpoint path relative to workspace",
+      "default": "logs/rsl_rl/go2_jump_trampoline/2026-03-25_02-43-44/model_3500.pt"
+    },
+    {
+      "id": "hoppingTrampolinePlayNumEnvs",
+      "type": "promptString",
+      "description": "number of environments for trampoline hopping play",
+      "default": "1"
+    },
+    {
+      "id": "hoppingPlayCommandVx",
+      "type": "promptString",
+      "description": "fixed hopping play forward velocity",
+      "default": "0.0"
+    },
+    {
+      "id": "hoppingPlayCommandVy",
+      "type": "promptString",
+      "description": "fixed hopping play lateral velocity",
+      "default": "0.0"
+    },
+    {
+      "id": "hoppingPlayCommandYaw",
+      "type": "promptString",
+      "description": "fixed hopping play yaw rate",
+      "default": "0.0"
     }
   ]
 }
