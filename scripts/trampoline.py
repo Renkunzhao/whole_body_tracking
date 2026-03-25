@@ -1,4 +1,4 @@
-"""Unified trampoline smoke script for G1 or ball actors.
+"""Unified trampoline smoke script for G1, Go2, or ball actors.
 
 This script merges the common use-cases from:
 
@@ -9,7 +9,7 @@ This script merges the common use-cases from:
 
 The two main switches are:
 
-- ``--actor {g1,ball}``
+- ``--actor {g1,go2,ball}``
 - ``--trampoline_mode {builtin,spring}``
 
 Notes:
@@ -18,6 +18,7 @@ Notes:
 - ``spring`` uses a custom flat support model:
   - ``ball``: a vertical spring-damper force on the rigid ball
   - ``g1``: the existing point-foot custom contact model on the two ankle links
+  - ``go2``: a point-foot custom contact model on the four foot links
 """
 
 from __future__ import annotations
@@ -27,8 +28,8 @@ import argparse
 from isaaclab.app import AppLauncher
 
 
-parser = argparse.ArgumentParser(description="Load G1 or ball on a built-in or custom trampoline.")
-parser.add_argument("--actor", type=str, choices=("g1", "ball"), default="g1", help="Actor placed on the trampoline.")
+parser = argparse.ArgumentParser(description="Load G1, Go2, or ball on a built-in or custom trampoline.")
+parser.add_argument("--actor", type=str, choices=("g1", "go2", "ball"), default="g1", help="Actor placed on the trampoline.")
 parser.add_argument(
     "--trampoline_mode",
     type=str,
@@ -42,7 +43,7 @@ parser.add_argument(
     "--passive",
     action="store_true",
     default=False,
-    help="If set for G1, do not command the default standing pose.",
+    help="If set for robot actors, do not command the default standing pose.",
 )
 parser.add_argument(
     "--reset_interval",
@@ -60,7 +61,7 @@ parser.add_argument(
     "--surface_height",
     type=float,
     default=None,
-    help="Support surface height. Defaults to 0.0 for G1 and 0.75 for ball.",
+    help="Support surface height. Defaults to 0.0 for robot actors and 0.75 for ball.",
 )
 
 # built-in deformable trampoline options
@@ -97,7 +98,7 @@ parser.add_argument(
     "--max_force",
     type=float,
     default=None,
-    help="Optional force clamp for the ball spring model. Ignored for G1.",
+    help="Optional force clamp for the ball spring model. Ignored for robot actors.",
 )
 
 # ball options
@@ -129,6 +130,7 @@ from isaaclab.utils import configclass
 from isaaclab.utils.math import sample_uniform
 
 from whole_body_tracking.robots.g1 import G1_CYLINDER_CFG
+from whole_body_tracking.robots.go2 import GO2_CFG
 from whole_body_tracking.utils.point_foot_contact_force import PointFootContactForceCfg, PointFootContactForceModel
 from whole_body_tracking.utils.spring_terrain import VerticalSpringPlane, VerticalSpringPlaneCfg
 from whole_body_tracking.utils.trampoline_deformable import (
@@ -146,6 +148,13 @@ SPRING_PLANE_RADIUS = 1.5
 SPRING_PLANE_THICKNESS = 0.02
 G1_CONTACT_BODY_NAMES = ["left_ankle_roll_link", "right_ankle_roll_link"]
 G1_CONTACT_POINT_OFFSETS_LOCAL = ((0.04, 0.0, -0.037), (0.04, 0.0, -0.037))
+GO2_CONTACT_BODY_NAMES = ["FL_foot", "FR_foot", "RL_foot", "RR_foot"]
+GO2_CONTACT_POINT_OFFSETS_LOCAL = (
+    (-0.002, 0.0, -0.022),
+    (-0.002, 0.0, -0.022),
+    (-0.002, 0.0, -0.022),
+    (-0.002, 0.0, -0.022),
+)
 
 
 def make_trampoline_node_marker_cfg(
@@ -182,7 +191,7 @@ class UnifiedTrampolineSceneCfg(InteractiveSceneCfg):
 def resolve_surface_height() -> float:
     if args_cli.surface_height is not None:
         return args_cli.surface_height
-    return 0.0 if args_cli.actor == "g1" else 0.75
+    return 0.0 if args_cli.actor != "ball" else 0.75
 
 
 def resolve_ball_height(surface_height: float) -> float:
@@ -194,13 +203,13 @@ def resolve_ball_height(surface_height: float) -> float:
 def resolve_reset_interval() -> int:
     if args_cli.reset_interval is not None:
         return args_cli.reset_interval
-    return 500 if args_cli.actor == "g1" else 360
+    return 500 if args_cli.actor != "ball" else 360
 
 
 def resolve_env_spacing() -> float:
     if args_cli.env_spacing is not None:
         return args_cli.env_spacing
-    return 4.0 if args_cli.actor == "g1" or args_cli.trampoline_mode == "builtin" else 3.0
+    return 4.0 if args_cli.actor != "ball" or args_cli.trampoline_mode == "builtin" else 3.0
 
 
 def make_ball_cfg(prim_path: str, ball_height: float) -> RigidObjectCfg:
@@ -247,6 +256,8 @@ def build_scene_cfg(surface_height: float, ball_height: float, env_spacing: floa
     )
     if args_cli.actor == "g1":
         scene_cfg.robot = G1_CYLINDER_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
+    elif args_cli.actor == "go2":
+        scene_cfg.robot = GO2_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
     else:
         scene_cfg.ball = make_ball_cfg("{ENV_REGEX_NS}/Ball", ball_height)
 
@@ -266,6 +277,8 @@ def build_scene_cfg(surface_height: float, ball_height: float, env_spacing: floa
 def set_camera(sim: SimulationContext, surface_height: float) -> None:
     if args_cli.actor == "g1":
         sim.set_camera_view(eye=[2.5, 2.5, surface_height + 1.8], target=[0.0, 0.0, surface_height + 0.7])
+    elif args_cli.actor == "go2":
+        sim.set_camera_view(eye=[2.2, 2.2, surface_height + 1.2], target=[0.0, 0.0, surface_height + 0.3])
     else:
         sim.set_camera_view(eye=[4.5, -4.0, surface_height + 2.0], target=[0.0, 0.0, surface_height + 0.2])
 
@@ -365,10 +378,19 @@ def reset_deformable_trampoline(
     return youngs_modulus, mass
 
 
-def build_g1_spring_runtime(robot: Articulation, num_envs: int) -> dict[str, object]:
-    body_ids, body_names = robot.find_bodies(G1_CONTACT_BODY_NAMES, preserve_order=True)
-    if len(body_ids) != len(G1_CONTACT_BODY_NAMES):
-        raise RuntimeError(f"Failed to resolve custom contact bodies: expected {G1_CONTACT_BODY_NAMES}, got {body_names}.")
+def resolve_robot_contact_setup(actor: str) -> tuple[list[str], tuple[tuple[float, float, float], ...]]:
+    if actor == "g1":
+        return G1_CONTACT_BODY_NAMES, G1_CONTACT_POINT_OFFSETS_LOCAL
+    if actor == "go2":
+        return GO2_CONTACT_BODY_NAMES, GO2_CONTACT_POINT_OFFSETS_LOCAL
+    raise ValueError(f"Unsupported robot actor for spring contact: {actor}.")
+
+
+def build_robot_spring_runtime(robot: Articulation, actor: str, num_envs: int) -> dict[str, object]:
+    contact_body_names, contact_point_offsets_local = resolve_robot_contact_setup(actor)
+    body_ids, body_names = robot.find_bodies(contact_body_names, preserve_order=True)
+    if len(body_ids) != len(contact_body_names):
+        raise RuntimeError(f"Failed to resolve custom contact bodies: expected {contact_body_names}, got {body_names}.")
 
     model = PointFootContactForceModel(
         PointFootContactForceCfg(
@@ -385,7 +407,7 @@ def build_g1_spring_runtime(robot: Articulation, num_envs: int) -> dict[str, obj
         "model": model,
         "body_ids": list(body_ids),
         "body_names": body_names,
-        "offsets_local": torch.tensor(G1_CONTACT_POINT_OFFSETS_LOCAL, device=robot.device, dtype=torch.float32),
+        "offsets_local": torch.tensor(contact_point_offsets_local, device=robot.device, dtype=torch.float32),
         "tangential_displacement_w": torch.zeros((num_envs, num_bodies, 3), device=robot.device),
         "last_penetration": torch.zeros((num_envs, num_bodies), device=robot.device),
         "last_normal_force": torch.zeros((num_envs, num_bodies), device=robot.device),
@@ -393,7 +415,7 @@ def build_g1_spring_runtime(robot: Articulation, num_envs: int) -> dict[str, obj
     }
 
 
-def clear_g1_spring_contact(robot: Articulation, runtime: dict[str, object]) -> None:
+def clear_robot_spring_contact(robot: Articulation, runtime: dict[str, object]) -> None:
     body_ids = runtime["body_ids"]
     num_bodies = len(body_ids)
     zero_force = torch.zeros((robot.num_instances, num_bodies, 3), device=robot.device)
@@ -410,7 +432,7 @@ def clear_g1_spring_contact(robot: Articulation, runtime: dict[str, object]) -> 
     runtime["last_tangential_force_norm"].zero_()
 
 
-def apply_g1_spring_contact(
+def apply_robot_spring_contact(
     scene: InteractiveScene,
     robot: Articulation,
     runtime: dict[str, object],
@@ -473,6 +495,8 @@ def print_mode_summary(surface_height: float, ball_height: float | None) -> None
     print(summary)
     if args_cli.trampoline_mode == "spring" and args_cli.actor == "g1":
         print("[INFO]: Custom G1 mode uses the point-foot contact approximation on the ankle roll links.")
+    if args_cli.trampoline_mode == "spring" and args_cli.actor == "go2":
+        print("[INFO]: Custom Go2 mode uses the point-foot contact approximation on the four foot links.")
 
 
 def build_trampoline_node_visualizers() -> tuple[VisualizationMarkers, VisualizationMarkers]:
@@ -506,7 +530,7 @@ def main() -> None:
     env_spacing = resolve_env_spacing()
     reset_interval = resolve_reset_interval()
 
-    sim_dt = 0.005 if args_cli.actor == "g1" else 1.0 / 120.0
+    sim_dt = 0.005 if args_cli.actor != "ball" else 1.0 / 120.0
     sim = SimulationContext(sim_utils.SimulationCfg(dt=sim_dt, device=args_cli.device))
     set_camera(sim, surface_height)
 
@@ -516,7 +540,7 @@ def main() -> None:
     sim.reset()
     scene.update(sim_dt)
 
-    actor = scene["robot"] if args_cli.actor == "g1" else scene["ball"]
+    actor = scene["robot"] if args_cli.actor != "ball" else scene["ball"]
 
     trampoline = None
     trampoline_targets = None
@@ -543,7 +567,7 @@ def main() -> None:
         print("[INFO]: `--show_trampoline_nodes` only applies to `--trampoline_mode builtin`; ignoring it in spring mode.")
 
     spring_ball = None
-    spring_g1_runtime = None
+    spring_robot_runtime = None
     if args_cli.trampoline_mode == "spring":
         if args_cli.actor == "ball":
             spring_ball = VerticalSpringPlane(
@@ -556,15 +580,15 @@ def main() -> None:
                 )
             )
         else:
-            spring_g1_runtime = build_g1_spring_runtime(actor, scene.num_envs)
-            print(f"[INFO]: Resolved custom contact bodies: {spring_g1_runtime['body_names']}")
+            spring_robot_runtime = build_robot_spring_runtime(actor, args_cli.actor, scene.num_envs)
+            print(f"[INFO]: Resolved custom contact bodies: {spring_robot_runtime['body_names']}")
 
     if args_cli.actor == "ball":
         reset_ball(scene, actor)
     else:
         reset_robot(scene, actor, surface_height)
-        if spring_g1_runtime is not None:
-            clear_g1_spring_contact(actor, spring_g1_runtime)
+        if spring_robot_runtime is not None:
+            clear_robot_spring_contact(actor, spring_robot_runtime)
 
     if trampoline is not None:
         current_youngs_modulus, current_mass = reset_deformable_trampoline(
@@ -598,8 +622,8 @@ def main() -> None:
                 reset_ball(scene, actor)
             else:
                 reset_robot(scene, actor, surface_height)
-                if spring_g1_runtime is not None:
-                    clear_g1_spring_contact(actor, spring_g1_runtime)
+                if spring_robot_runtime is not None:
+                    clear_robot_spring_contact(actor, spring_robot_runtime)
             if trampoline is not None:
                 current_youngs_modulus, current_mass = reset_deformable_trampoline(
                     scene,
@@ -617,10 +641,10 @@ def main() -> None:
             trampoline.write_nodal_kinematic_target_to_sim(trampoline_targets)
         elif spring_ball is not None:
             spring_force_w, spring_penetration = apply_ball_spring_contact(actor, spring_ball)
-        elif spring_g1_runtime is not None:
-            apply_g1_spring_contact(scene, actor, spring_g1_runtime)
+        elif spring_robot_runtime is not None:
+            apply_robot_spring_contact(scene, actor, spring_robot_runtime)
 
-        if args_cli.actor == "g1" and not args_cli.passive:
+        if args_cli.actor != "ball" and not args_cli.passive:
             actor.set_joint_position_target(actor.data.default_joint_pos.clone())
 
         actor.write_data_to_sim()
@@ -653,8 +677,8 @@ def main() -> None:
                     f"trampoline_center_z={center_height:.3f}"
                 )
             else:
-                mean_penetration = spring_g1_runtime["last_penetration"][0].mean().item()
-                mean_normal_force = spring_g1_runtime["last_normal_force"][0].mean().item()
+                mean_penetration = spring_robot_runtime["last_penetration"][0].mean().item()
+                mean_normal_force = spring_robot_runtime["last_normal_force"][0].mean().item()
                 print(
                     f"[INFO]: step={step}, root_z={actor.data.root_pos_w[0, 2].item():.3f}, "
                     f"mean_foot_penetration={mean_penetration:.4f}, mean_foot_normal_force={mean_normal_force:.3f}"

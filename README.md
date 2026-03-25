@@ -52,6 +52,9 @@ cd whole_body_tracking
 curl -L -o unitree_description.tar.gz https://storage.googleapis.com/qiayuanl_robot_descriptions/unitree_description.tar.gz && \
 tar -xzf unitree_description.tar.gz -C source/whole_body_tracking/whole_body_tracking/assets/ && \
 rm unitree_description.tar.gz
+
+cd source/whole_body_tracking/whole_body_tracking/assets/ 
+git clone https://github.com/Renkunzhao/legged_models.git
 ```
 
 - Using a Python interpreter that has Isaac Lab installed, install the library
