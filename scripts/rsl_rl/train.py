@@ -73,14 +73,29 @@ from isaaclab.envs import (
     multi_agent_to_single_agent,
 )
 from isaaclab.utils.dict import print_dict
-from isaaclab.utils.io import dump_pickle, dump_yaml
+try:
+    from isaaclab.utils.io import dump_pickle, dump_yaml
+except ImportError:
+    from isaaclab.utils.io import dump_yaml
+    import pickle
+
+    def dump_pickle(filename: str, data):
+        file_path = pathlib.Path(filename)
+        if file_path.suffix != ".pkl":
+            file_path = file_path.with_suffix(".pkl")
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        with file_path.open("wb") as f:
+            pickle.dump(data, f)
+
 from isaaclab_rl.rsl_rl import RslRlOnPolicyRunnerCfg, RslRlVecEnvWrapper
 from isaaclab_tasks.utils import get_checkpoint_path
 from isaaclab_tasks.utils.hydra import hydra_task_config
 
 # Import extensions to set up environment tasks
 import whole_body_tracking.tasks  # noqa: F401
-from whole_body_tracking.utils.my_on_policy_runner import MotionOnPolicyRunner as OnPolicyRunner
+from whole_body_tracking.utils.my_on_policy_runner import MotionOnPolicyRunner, MyOnPolicyRunner
+from whole_body_tracking.utils.task_utils import env_cfg_requires_motion
+
 
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
@@ -88,53 +103,57 @@ torch.backends.cudnn.deterministic = False
 torch.backends.cudnn.benchmark = False
 
 
+def _resolve_motion_source(env_cfg, motion_file: str | None, registry_name: str | None) -> str | None:
+    if motion_file is not None:
+        print(f"[INFO]: Using motion file from CLI: {motion_file}")
+        env_cfg.commands.motion.motion_file = motion_file
+        return None
+
+    if registry_name is None:
+        raise ValueError("Either --motion_file or --registry_name must be provided for motion-based tasks.")
+
+    if ":" not in registry_name:
+        registry_name += ":latest"
+
+    import wandb
+
+    api = wandb.Api()
+    artifact = api.artifact(registry_name)
+    env_cfg.commands.motion.motion_file = str(pathlib.Path(artifact.download()) / "motion.npz")
+    return registry_name
+
+
 @hydra_task_config(args_cli.task, "rsl_rl_cfg_entry_point")
 def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agent_cfg: RslRlOnPolicyRunnerCfg):
     """Train with RSL-RL agent."""
-    # override configurations with non-hydra CLI arguments
     agent_cfg = cli_args.update_rsl_rl_cfg(agent_cfg, args_cli)
     env_cfg.scene.num_envs = args_cli.num_envs if args_cli.num_envs is not None else env_cfg.scene.num_envs
     agent_cfg.max_iterations = (
         args_cli.max_iterations if args_cli.max_iterations is not None else agent_cfg.max_iterations
     )
 
-    # set the environment seed
-    # note: certain randomizations occur in the environment initialization so we set the seed here
     env_cfg.seed = agent_cfg.seed
     env_cfg.sim.device = args_cli.device if args_cli.device is not None else env_cfg.sim.device
 
-    # load the motion file either from CLI or from the wandb registry
-    registry_name = args_cli.registry_name
-    if args_cli.motion_file is not None:
-        print(f"[INFO]: Using motion file from CLI: {args_cli.motion_file}")
-        env_cfg.commands.motion.motion_file = args_cli.motion_file
-        registry_name = None
+    requires_motion = env_cfg_requires_motion(env_cfg)
+    registry_name = None
+    if requires_motion:
+        registry_name = _resolve_motion_source(env_cfg, args_cli.motion_file, args_cli.registry_name)
     else:
-        if registry_name is None:
-            raise ValueError("Either --motion_file or --registry_name must be provided.")
-        if ":" not in registry_name:  # Check if the registry name includes alias, if not, append ":latest"
-            registry_name += ":latest"
-        import pathlib
+        if args_cli.motion_file is not None:
+            print("[INFO]: Ignoring --motion_file for non-motion task.")
+        if args_cli.registry_name is not None:
+            print("[INFO]: Ignoring --registry_name for non-motion task.")
 
-        import wandb
-
-        api = wandb.Api()
-        artifact = api.artifact(registry_name)
-        env_cfg.commands.motion.motion_file = str(pathlib.Path(artifact.download()) / "motion.npz")
-
-    # specify directory for logging experiments
     log_root_path = os.path.join("logs", "rsl_rl", agent_cfg.experiment_name)
     log_root_path = os.path.abspath(log_root_path)
     print(f"[INFO] Logging experiment in directory: {log_root_path}")
-    # specify directory for logging runs: {time-stamp}_{run_name}
     log_dir = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     if agent_cfg.run_name:
         log_dir += f"_{agent_cfg.run_name}"
     log_dir = os.path.join(log_root_path, log_dir)
 
-    # create isaac environment
     env = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None)
-    # wrap for video recording
     if args_cli.video:
         video_kwargs = {
             "video_folder": os.path.join(log_dir, "videos", "train"),
@@ -146,42 +165,39 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         print_dict(video_kwargs, nesting=4)
         env = gym.wrappers.RecordVideo(env, **video_kwargs)
 
-    # convert to single-agent instance if required by the RL algorithm
     if isinstance(env.unwrapped, DirectMARLEnv):
         env = multi_agent_to_single_agent(env)
 
-    # wrap around environment for rsl-rl
-    env = RslRlVecEnvWrapper(env)
+    env = RslRlVecEnvWrapper(env, clip_actions=agent_cfg.clip_actions)
 
-    # create runner from rsl-rl
-    runner = OnPolicyRunner(
-        env, agent_cfg.to_dict(), log_dir=log_dir, device=agent_cfg.device, registry_name=registry_name
-    )
-    # write git state to logs
+    runner_cls = MotionOnPolicyRunner if requires_motion else MyOnPolicyRunner
+    if requires_motion:
+        runner = runner_cls(
+            env,
+            agent_cfg.to_dict(),
+            log_dir=log_dir,
+            device=agent_cfg.device,
+            registry_name=registry_name,
+        )
+    else:
+        runner = runner_cls(env, agent_cfg.to_dict(), log_dir=log_dir, device=agent_cfg.device)
+
     runner.add_git_repo_to_log(__file__)
-    # save resume path before creating a new log_dir
     if agent_cfg.resume:
-        # get path to previous checkpoint
         resume_path = get_checkpoint_path(log_root_path, agent_cfg.load_run, agent_cfg.load_checkpoint)
         print(f"[INFO]: Loading model checkpoint from: {resume_path}")
-        # load previously trained model
         runner.load(resume_path)
 
-    # dump the configuration into log-directory
     dump_yaml(os.path.join(log_dir, "params", "env.yaml"), env_cfg)
     dump_yaml(os.path.join(log_dir, "params", "agent.yaml"), agent_cfg)
     dump_pickle(os.path.join(log_dir, "params", "env.pkl"), env_cfg)
     dump_pickle(os.path.join(log_dir, "params", "agent.pkl"), agent_cfg)
 
-    # run training
     runner.learn(num_learning_iterations=agent_cfg.max_iterations, init_at_random_ep_len=True)
 
-    # close the simulator
     env.close()
 
 
 if __name__ == "__main__":
-    # run the main function
     main()
-    # close sim app
     simulation_app.close()
