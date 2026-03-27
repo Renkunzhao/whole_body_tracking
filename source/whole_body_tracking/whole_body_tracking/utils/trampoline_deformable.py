@@ -3,7 +3,8 @@ from __future__ import annotations
 import torch
 
 import isaaclab.sim as sim_utils
-from isaaclab.assets import DeformableObjectCfg
+from isaaclab.assets import DeformableObject, DeformableObjectCfg
+from isaaclab.markers import VisualizationMarkers, VisualizationMarkersCfg
 
 TRAMPOLINE_RADIUS = 1.5
 TRAMPOLINE_THICKNESS = 0.1
@@ -84,6 +85,49 @@ def build_trampoline_kinematic_targets(
         torch.ones_like(targets[..., 3]),
     )
     return targets, pinned_mask, center_node_ids
+
+
+def make_trampoline_node_marker_cfg(
+    prim_path: str,
+    color: tuple[float, float, float],
+) -> VisualizationMarkersCfg:
+    """Create a marker config for visualizing trampoline nodes."""
+    return VisualizationMarkersCfg(
+        prim_path=prim_path,
+        markers={
+            "node": sim_utils.SphereCfg(
+                radius=0.012,
+                visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=color),
+            )
+        },
+    )
+
+
+def build_trampoline_node_visualizers() -> tuple[VisualizationMarkers, VisualizationMarkers]:
+    """Create pinned (red) and free (green) node visualizers for the deformable trampoline."""
+    pinned_visualizer = VisualizationMarkers(
+        make_trampoline_node_marker_cfg("/Visuals/TrampolinePinnedNodes", color=(1.0, 0.2, 0.2))
+    )
+    free_visualizer = VisualizationMarkers(
+        make_trampoline_node_marker_cfg("/Visuals/TrampolineFreeNodes", color=(0.2, 1.0, 0.2))
+    )
+    return pinned_visualizer, free_visualizer
+
+
+def update_trampoline_node_visualizers(
+    trampoline: DeformableObject,
+    pinned_mask: torch.Tensor,
+    pinned_visualizer: VisualizationMarkers | None,
+    free_visualizer: VisualizationMarkers | None,
+) -> None:
+    """Update the pinned/free node marker positions from current nodal state."""
+    if pinned_visualizer is None or free_visualizer is None:
+        return
+
+    env0_mask = pinned_mask[0]
+    env0_nodal_pos_w = trampoline.data.nodal_pos_w[0]
+    pinned_visualizer.visualize(translations=env0_nodal_pos_w[env0_mask])
+    free_visualizer.visualize(translations=env0_nodal_pos_w[~env0_mask])
 
 
 def trampoline_mesh_prim_path(root_prim_path: str) -> str:

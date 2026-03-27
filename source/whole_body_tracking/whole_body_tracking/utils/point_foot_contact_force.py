@@ -3,7 +3,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import torch
-from isaaclab.utils.math import quat_apply
 
 
 @dataclass(slots=True)
@@ -61,6 +60,10 @@ class PointFootContactForceModel:
         Returns:
             A tuple ``(force_w, torque_w, contact_pos_w, penetration, normal_force, tangential_force_norm,
             contact_active, tangential_displacement_w)``.
+
+        Notes:
+            This simplified variant keeps the same interface but ignores ``body_quat_w``, ``body_ang_vel_w``,
+            and ``contact_point_offsets_local``. Contact is evaluated directly at the body origin, and torque is zero.
         """
         if body_pos_w.ndim != 2 or body_pos_w.shape[-1] != 3:
             raise ValueError(f"Expected body_pos_w to have shape (N, 3), got {tuple(body_pos_w.shape)}.")
@@ -92,9 +95,8 @@ class PointFootContactForceModel:
                 f"got {tuple(tangential_displacement_w.shape)} and {tuple(body_pos_w.shape)}."
             )
 
-        contact_offset_w = quat_apply(body_quat_w, contact_point_offsets_local)
-        contact_pos_w = body_pos_w + contact_offset_w
-        contact_vel_w = body_lin_vel_w + torch.cross(body_ang_vel_w, contact_offset_w, dim=-1)
+        contact_pos_w = body_pos_w
+        contact_vel_w = body_lin_vel_w
 
         contact_height = contact_pos_w[:, 2]
         if env_origins is not None:
@@ -152,7 +154,7 @@ class PointFootContactForceModel:
 
         total_force_w += tangential_force_w
 
-        torque_w = torch.cross(contact_offset_w, total_force_w, dim=-1)
+        torque_w = torch.zeros_like(total_force_w)
 
         return (
             total_force_w,
