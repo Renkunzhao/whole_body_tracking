@@ -75,5 +75,5 @@
 - Phase 2 只做 `Tracking-Flat-G1-*`，不提前抽象到 GO2 或其它 humanoid
 - 只做平地，不做 rough terrain 法向查询
 - 每只脚单接触点是刻意简化；后续如果要更真实支撑面，再扩到两点或四点脚底
-- `spring_terrain.py` 和 phase 1 的 ball-drop demo 保持不动
+- ball 的自定义 spring 路径已并入统一的点接触模型，不再单独维护 `spring_terrain.py`
 - 当前优先保证“下肢地面碰撞确实消失、自定义接触确实接管”，暂不处理由此带来的 reward / termination 设计细化

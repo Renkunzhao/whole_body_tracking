@@ -16,7 +16,7 @@ Notes:
 
 - ``builtin`` uses Isaac Lab's deformable body support with pinned rim nodes.
 - ``spring`` uses a custom flat support model:
-  - ``ball``: a vertical spring-damper force on the rigid ball
+  - ``ball``: a point-contact model on the sphere bottom point
   - ``g1``: the existing point-foot custom contact model on the two ankle links
   - ``go2``: a point-foot custom contact model on the four foot links
 """
@@ -38,7 +38,7 @@ parser.add_argument(
     help="Trampoline implementation to use.",
 )
 parser.add_argument("--num_envs", type=int, default=1, help="Number of scene instances to spawn.")
-parser.add_argument("--env_spacing", type=float, default=None, help="Environment spacing. Uses a mode-dependent default.")
+parser.add_argument("--env_spacing", type=float, default=None, help="Environment spacing. Defaults to 4.0 when omitted.")
 parser.add_argument(
     "--passive",
     action="store_true",
@@ -49,7 +49,7 @@ parser.add_argument(
     "--reset_interval",
     type=int,
     default=None,
-    help="Number of simulation steps between resets. Uses an actor-dependent default when omitted.",
+    help="Number of simulation steps between resets. Defaults to 500 when omitted.",
 )
 parser.add_argument(
     "--print_interval",
@@ -61,7 +61,7 @@ parser.add_argument(
     "--surface_height",
     type=float,
     default=None,
-    help="Support surface height. Defaults to 0.0 for robot actors and 0.75 for ball.",
+    help="Support surface height. Defaults to 0.0 when omitted.",
 )
 
 # built-in deformable trampoline options
@@ -89,21 +89,21 @@ parser.add_argument(
 )
 
 # custom spring model options
-parser.add_argument("--normal_stiffness", type=float, default=900.0, help="Custom model normal stiffness.")
-parser.add_argument("--normal_damping", type=float, default=30.0, help="Custom model normal damping.")
+parser.add_argument("--normal_stiffness", type=float, default=5000.0, help="Custom model normal stiffness.")
+parser.add_argument("--normal_damping", type=float, default=120.0, help="Custom model normal damping.")
 parser.add_argument("--tangential_stiffness", type=float, default=2000.0, help="Custom model tangential stiffness.")
 parser.add_argument("--tangential_damping", type=float, default=75.0, help="Custom model tangential damping.")
-parser.add_argument("--friction_coeff", type=float, default=1.0, help="Custom model friction coefficient.")
-parser.add_argument(
-    "--max_force",
-    type=float,
-    default=None,
-    help="Optional force clamp for the ball spring model. Ignored for robot actors.",
-)
+parser.add_argument("--friction_coeff", type=float, default=0.0, help="Custom model friction coefficient.")
 
 # ball options
 parser.add_argument("--ball_radius", type=float, default=0.18, help="Ball radius in meters.")
 parser.add_argument("--ball_mass", type=float, default=6.0, help="Ball mass in kilograms.")
+parser.add_argument(
+    "--ball_horizontal_speed",
+    type=float,
+    default=1.0,
+    help="Horizontal speed magnitude assigned to the ball at each reset; direction is randomized.",
+)
 parser.add_argument(
     "--ball_height",
     type=float,
@@ -132,7 +132,6 @@ from isaaclab.utils.math import sample_uniform
 from whole_body_tracking.robots.g1 import G1_CYLINDER_CFG
 from whole_body_tracking.robots.go2 import GO2_CFG
 from whole_body_tracking.utils.point_foot_contact_force import PointFootContactForceCfg, PointFootContactForceModel
-from whole_body_tracking.utils.spring_terrain import VerticalSpringPlane, VerticalSpringPlaneCfg
 from whole_body_tracking.utils.trampoline_deformable import (
     TRAMPOLINE_DR_MASS_RANGE,
     TRAMPOLINE_DR_YOUNGS_MODULUS_RANGE,
@@ -191,7 +190,7 @@ class UnifiedTrampolineSceneCfg(InteractiveSceneCfg):
 def resolve_surface_height() -> float:
     if args_cli.surface_height is not None:
         return args_cli.surface_height
-    return 0.0 if args_cli.actor != "ball" else 0.75
+    return 0.0
 
 
 def resolve_ball_height(surface_height: float) -> float:
@@ -203,13 +202,13 @@ def resolve_ball_height(surface_height: float) -> float:
 def resolve_reset_interval() -> int:
     if args_cli.reset_interval is not None:
         return args_cli.reset_interval
-    return 500 if args_cli.actor != "ball" else 360
+    return 500
 
 
 def resolve_env_spacing() -> float:
     if args_cli.env_spacing is not None:
         return args_cli.env_spacing
-    return 4.0 if args_cli.actor != "ball" or args_cli.trampoline_mode == "builtin" else 3.0
+    return 4.0
 
 
 def make_ball_cfg(prim_path: str, ball_height: float) -> RigidObjectCfg:
@@ -297,6 +296,10 @@ def reset_ball(scene: InteractiveScene, ball: RigidObject) -> None:
     env_ids = torch.arange(scene.num_envs, device=ball.device, dtype=torch.long)
     default_root_state = ball.data.default_root_state.clone()
     default_root_state[:, 0:3] += scene.env_origins
+    if args_cli.ball_horizontal_speed > 0.0:
+        headings = sample_uniform(0.0, 2.0 * torch.pi, (scene.num_envs,), device=ball.device)
+        default_root_state[:, 7] = args_cli.ball_horizontal_speed * torch.cos(headings)
+        default_root_state[:, 8] = args_cli.ball_horizontal_speed * torch.sin(headings)
     ball.write_root_pose_to_sim(default_root_state[:, :7], env_ids=env_ids)
     ball.write_root_velocity_to_sim(default_root_state[:, 7:], env_ids=env_ids)
     ball.reset()
@@ -415,6 +418,28 @@ def build_robot_spring_runtime(robot: Articulation, actor: str, num_envs: int) -
     }
 
 
+def build_ball_spring_runtime(ball: RigidObject, num_envs: int) -> dict[str, object]:
+    model = PointFootContactForceModel(
+        PointFootContactForceCfg(
+            plane_height=resolve_surface_height(),
+            normal_stiffness=args_cli.normal_stiffness,
+            normal_damping=args_cli.normal_damping,
+            tangential_stiffness=args_cli.tangential_stiffness,
+            tangential_damping=args_cli.tangential_damping,
+            friction_coeff=args_cli.friction_coeff,
+        )
+    )
+    return {
+        "model": model,
+        "offsets_local": torch.tensor(((0.0, 0.0, -args_cli.ball_radius),), device=ball.device, dtype=torch.float32),
+        "tangential_displacement_w": torch.zeros((num_envs, 1, 3), device=ball.device),
+        "last_penetration": torch.zeros((num_envs, 1), device=ball.device),
+        "last_normal_force": torch.zeros((num_envs, 1), device=ball.device),
+        "last_tangential_force_norm": torch.zeros((num_envs, 1), device=ball.device),
+        "last_force_w": torch.zeros((num_envs, 3), device=ball.device),
+    }
+
+
 def clear_robot_spring_contact(robot: Articulation, runtime: dict[str, object]) -> None:
     body_ids = runtime["body_ids"]
     num_bodies = len(body_ids)
@@ -430,6 +455,15 @@ def clear_robot_spring_contact(robot: Articulation, runtime: dict[str, object]) 
     runtime["last_penetration"].zero_()
     runtime["last_normal_force"].zero_()
     runtime["last_tangential_force_norm"].zero_()
+
+
+def clear_ball_spring_contact(ball: RigidObject, runtime: dict[str, object]) -> None:
+    clear_ball_wrench(ball)
+    runtime["tangential_displacement_w"].zero_()
+    runtime["last_penetration"].zero_()
+    runtime["last_normal_force"].zero_()
+    runtime["last_tangential_force_norm"].zero_()
+    runtime["last_force_w"].zero_()
 
 
 def apply_robot_spring_contact(
@@ -474,12 +508,36 @@ def apply_robot_spring_contact(
     )
 
 
-def apply_ball_spring_contact(ball: RigidObject, spring_plane: VerticalSpringPlane) -> tuple[torch.Tensor, torch.Tensor]:
-    force_w, penetration, _ = spring_plane.compute_force(ball.data.root_pos_w, ball.data.root_lin_vel_w)
-    zero_torque = torch.zeros_like(force_w)
+def apply_ball_spring_contact(
+    scene: InteractiveScene,
+    ball: RigidObject,
+    runtime: dict[str, object],
+) -> tuple[torch.Tensor, torch.Tensor]:
+    body_quat_w = torch.zeros_like(ball.data.root_quat_w)
+    body_quat_w[:, 0] = 1.0
+    offsets_local = runtime["offsets_local"].expand(scene.num_envs, -1)
+    force_w, torque_w, _, penetration, normal_force, tangential_force_norm, _, tangential_displacement_w = runtime[
+        "model"
+    ].compute_wrenches(
+        ball.data.root_pos_w,
+        body_quat_w,
+        ball.data.root_lin_vel_w,
+        ball.data.root_ang_vel_w,
+        offsets_local,
+        env_origins=scene.env_origins,
+        tangential_displacement_w=runtime["tangential_displacement_w"].reshape(-1, 3),
+        dt=scene.physics_dt,
+    )
+
+    runtime["tangential_displacement_w"] = tangential_displacement_w.view(scene.num_envs, 1, 3)
+    runtime["last_penetration"] = penetration.view(scene.num_envs, 1)
+    runtime["last_normal_force"] = normal_force.view(scene.num_envs, 1)
+    runtime["last_tangential_force_norm"] = tangential_force_norm.view(scene.num_envs, 1)
+    runtime["last_force_w"] = force_w
+
     ball.permanent_wrench_composer.set_forces_and_torques(
         forces=force_w.unsqueeze(1),
-        torques=zero_torque.unsqueeze(1),
+        torques=torque_w.unsqueeze(1),
         is_global=True,
     )
     return force_w, penetration
@@ -493,6 +551,8 @@ def print_mode_summary(surface_height: float, ball_height: float | None) -> None
     if args_cli.actor == "ball" and ball_height is not None:
         summary += f", ball_height={ball_height:.3f}"
     print(summary)
+    if args_cli.trampoline_mode == "spring" and args_cli.actor == "ball":
+        print("[INFO]: Custom ball mode uses the point-contact approximation on the sphere bottom point.")
     if args_cli.trampoline_mode == "spring" and args_cli.actor == "g1":
         print("[INFO]: Custom G1 mode uses the point-foot contact approximation on the ankle roll links.")
     if args_cli.trampoline_mode == "spring" and args_cli.actor == "go2":
@@ -566,25 +626,19 @@ def main() -> None:
     elif args_cli.show_trampoline_nodes:
         print("[INFO]: `--show_trampoline_nodes` only applies to `--trampoline_mode builtin`; ignoring it in spring mode.")
 
-    spring_ball = None
+    spring_ball_runtime = None
     spring_robot_runtime = None
     if args_cli.trampoline_mode == "spring":
         if args_cli.actor == "ball":
-            spring_ball = VerticalSpringPlane(
-                VerticalSpringPlaneCfg(
-                    plane_height=surface_height,
-                    stiffness=args_cli.normal_stiffness,
-                    damping=args_cli.normal_damping,
-                    contact_radius=args_cli.ball_radius,
-                    max_force=args_cli.max_force,
-                )
-            )
+            spring_ball_runtime = build_ball_spring_runtime(actor, scene.num_envs)
         else:
             spring_robot_runtime = build_robot_spring_runtime(actor, args_cli.actor, scene.num_envs)
             print(f"[INFO]: Resolved custom contact bodies: {spring_robot_runtime['body_names']}")
 
     if args_cli.actor == "ball":
         reset_ball(scene, actor)
+        if spring_ball_runtime is not None:
+            clear_ball_spring_contact(actor, spring_ball_runtime)
     else:
         reset_robot(scene, actor, surface_height)
         if spring_robot_runtime is not None:
@@ -620,6 +674,8 @@ def main() -> None:
         if step > 0 and step % reset_interval == 0:
             if args_cli.actor == "ball":
                 reset_ball(scene, actor)
+                if spring_ball_runtime is not None:
+                    clear_ball_spring_contact(actor, spring_ball_runtime)
             else:
                 reset_robot(scene, actor, surface_height)
                 if spring_robot_runtime is not None:
@@ -639,8 +695,8 @@ def main() -> None:
 
         if trampoline is not None:
             trampoline.write_nodal_kinematic_target_to_sim(trampoline_targets)
-        elif spring_ball is not None:
-            spring_force_w, spring_penetration = apply_ball_spring_contact(actor, spring_ball)
+        elif spring_ball_runtime is not None:
+            spring_force_w, spring_penetration = apply_ball_spring_contact(scene, actor, spring_ball_runtime)
         elif spring_robot_runtime is not None:
             apply_robot_spring_contact(scene, actor, spring_robot_runtime)
 

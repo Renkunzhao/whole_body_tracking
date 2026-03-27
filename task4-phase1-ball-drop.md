@@ -6,10 +6,7 @@
 - phase 1 先把接口做干净，再决定如何接回 training env。
 
 ## 已实现内容
-- 新增 [spring_terrain.py](/home/rkz/code/whole_body_tracking/source/whole_body_tracking/whole_body_tracking/utils/spring_terrain.py)
-  - 提供 `VerticalSpringPlaneCfg`
-  - 提供 `VerticalSpringPlane`
-  - 核心接口为 `compute_force(root_pos_w, root_lin_vel_w)`
+- 历史上的 `spring_terrain.py` 单独竖直弹簧原型已移除
 - 新增 [trampoline_spring.py](/home/rkz/code/whole_body_tracking/scripts/trampoline_spring.py)
   - 使用 `AppLauncher` + `SimulationContext`
   - 只创建一个刚体球和一个纯视觉圆盘
@@ -17,12 +14,9 @@
   - 每个 physics step 用 `permanent_wrench_composer` 把自定义 spring force 写回仿真
 
 ## 力模型
-- 参考平面高度为 `plane_height`
-- 球底高度为 `bottom_height = root_pos_w[:, 2] - contact_radius`
-- 穿透深度为 `penetration = clamp(plane_height - bottom_height, min=0.0)`
-- 竖直力为 `force_z = stiffness * penetration - damping * root_lin_vel_w[:, 2]`
-- 最终使用单边约束 `force_z = clamp(force_z, min=0.0)`
-- 只沿 world `+Z` 方向施力，不做切向力，不做接触点 torque
+- 当前球的自定义支撑已切到与机器人共用的点接触模型
+- 接触点取球底点，默认 offset 为 `(0, 0, -ball_radius)`
+- 法向和切向力都由 [point_foot_contact_force.py](/home/rkz/code/whole_body_tracking/source/whole_body_tracking/whole_body_tracking/utils/point_foot_contact_force.py) 统一计算
 
 ## Demo 默认参数
 - `stiffness=5000.0`
