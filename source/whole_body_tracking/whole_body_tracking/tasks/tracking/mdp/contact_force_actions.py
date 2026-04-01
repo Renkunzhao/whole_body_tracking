@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 
 class ContactForceAction(ActionTerm):
-    """Applies custom point-foot ground contact wrenches without consuming policy actions."""
+    """Applies simplified custom ground-contact wrenches at the selected body origins."""
 
     cfg: "ContactForceActionCfg"
 
@@ -31,13 +31,11 @@ class ContactForceAction(ActionTerm):
                 plane_height=cfg.contact_plane_height,
                 normal_stiffness=cfg.contact_normal_stiffness,
                 normal_damping=cfg.contact_normal_damping,
-                tangential_stiffness=cfg.contact_tangential_stiffness,
                 tangential_damping=cfg.contact_tangential_damping,
                 friction_coeff=cfg.contact_friction_coeff,
             )
         )
         self._contact_enabled = cfg.contact_enabled
-        self._sim_dt = env.physics_dt
 
         if cfg.contact_body_names is None:
             self._contact_body_ids: list[int] = []
@@ -49,26 +47,11 @@ class ContactForceAction(ActionTerm):
             self._contact_body_names = body_names
             self._num_contact_bodies = len(body_ids)
 
-        if cfg.contact_point_offsets_local is None:
-            self._contact_point_offsets_local = torch.zeros((0, 3), device=self.device, dtype=torch.float32)
-        else:
-            self._contact_point_offsets_local = torch.tensor(
-                cfg.contact_point_offsets_local, device=self.device, dtype=torch.float32
-            )
-        if self._contact_point_offsets_local.shape != (self._num_contact_bodies, 3):
-            raise ValueError(
-                "contact_point_offsets_local must provide one 3D offset per contact body, "
-                f"got {tuple(self._contact_point_offsets_local.shape)} for {self._num_contact_bodies} bodies."
-            )
-
         self._last_penetration = torch.zeros((self.num_envs, self._num_contact_bodies), device=self.device)
         self._last_normal_force = torch.zeros_like(self._last_penetration)
         self._last_tangential_force_norm = torch.zeros_like(self._last_penetration)
         self._last_contact_active = torch.zeros(
             (self.num_envs, self._num_contact_bodies), device=self.device, dtype=torch.bool
-        )
-        self._contact_tangential_displacement_w = torch.zeros(
-            (self.num_envs, self._num_contact_bodies, 3), device=self.device
         )
 
         logger.info(
@@ -120,7 +103,6 @@ class ContactForceAction(ActionTerm):
     def reset(self, env_ids: Sequence[int] | None = None) -> None:
         super().reset(env_ids=env_ids)
         self._write_zero_contact_wrench(env_ids=env_ids)
-        self._zero_contact_tangential_displacement(env_ids=env_ids)
         self._zero_contact_debug_buffers(env_ids=env_ids)
 
     def apply_actions(self):
@@ -128,7 +110,6 @@ class ContactForceAction(ActionTerm):
             self._apply_custom_foot_contact()
         else:
             self._write_zero_contact_wrench()
-            self._zero_contact_tangential_displacement()
             self._zero_contact_debug_buffers()
 
     def _apply_custom_foot_contact(self) -> None:
@@ -138,30 +119,19 @@ class ContactForceAction(ActionTerm):
             return
 
         body_pos_w = self._asset.data.body_pos_w[:, self._contact_body_ids]
-        body_quat_w = self._asset.data.body_quat_w[:, self._contact_body_ids]
         body_lin_vel_w = self._asset.data.body_lin_vel_w[:, self._contact_body_ids]
-        body_ang_vel_w = self._asset.data.body_ang_vel_w[:, self._contact_body_ids]
         env_origins = self._env.scene.env_origins.unsqueeze(1).expand(-1, self._num_contact_bodies, -1)
-        contact_point_offsets_local = self._contact_point_offsets_local.unsqueeze(0).expand(
-            self.num_envs, -1, -1
-        )
 
-        force_w, torque_w, _, penetration, normal_force, tangential_force_norm, contact_active, tangential_displacement_w = (
+        force_w, torque_w, _, penetration, normal_force, tangential_force_norm, contact_active = (
             self._contact_model.compute_wrenches(
                 body_pos_w.reshape(-1, 3),
-                body_quat_w.reshape(-1, 4),
                 body_lin_vel_w.reshape(-1, 3),
-                body_ang_vel_w.reshape(-1, 3),
-                contact_point_offsets_local.reshape(-1, 3),
                 env_origins=env_origins.reshape(-1, 3),
-                tangential_displacement_w=self._contact_tangential_displacement_w.reshape(-1, 3),
-                dt=self._sim_dt,
             )
         )
 
         force_w = force_w.view(self.num_envs, self._num_contact_bodies, 3)
         torque_w = torque_w.view(self.num_envs, self._num_contact_bodies, 3)
-        self._contact_tangential_displacement_w = tangential_displacement_w.view(self.num_envs, self._num_contact_bodies, 3)
         self._last_penetration = penetration.view(self.num_envs, self._num_contact_bodies)
         self._last_normal_force = normal_force.view(self.num_envs, self._num_contact_bodies)
         self._last_tangential_force_norm = tangential_force_norm.view(self.num_envs, self._num_contact_bodies)
@@ -214,17 +184,6 @@ class ContactForceAction(ActionTerm):
         self._last_tangential_force_norm[env_ids_tensor] = 0.0
         self._last_contact_active[env_ids_tensor] = False
 
-    def _zero_contact_tangential_displacement(self, env_ids: Sequence[int] | slice | None = None) -> None:
-        if self._num_contact_bodies == 0:
-            return
-        if env_ids is None or env_ids == slice(None):
-            self._contact_tangential_displacement_w.zero_()
-            return
-
-        env_ids_tensor = torch.as_tensor(env_ids, device=self.device, dtype=torch.long)
-        self._contact_tangential_displacement_w[env_ids_tensor] = 0.0
-
-
 @configclass
 class ContactForceActionCfg(ActionTermCfg):
     """Configuration for custom foot-ground contact applied as a separate action term."""
@@ -235,8 +194,6 @@ class ContactForceActionCfg(ActionTermCfg):
     contact_plane_height: float = 0.0
     contact_normal_stiffness: float = 5000.0
     contact_normal_damping: float = 120.0
-    contact_tangential_stiffness: float = 2000.0
-    contact_tangential_damping: float = 75.0
+    contact_tangential_damping: float = 120.0
     contact_friction_coeff: float = 1.0
     contact_body_names: list[str] | None = None
-    contact_point_offsets_local: tuple[tuple[float, float, float], ...] | None = None

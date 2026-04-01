@@ -16,14 +16,12 @@
     评估后发现第二种有一个非常严重的问题，如果要修改physix中对于contact force的计算，需要fork physix然后基于新的physix build isaacsim，工程量巨大
     
     切向力建模方式：
-        第一版只做阻尼 + 库仑限幅: F_t = -c_t * v_t，再裁到 ||F_t|| <= mu * F_n
-            优点无状态、稳定、实现轻
-            缺点是它更像“滑动阻尼 + 动摩擦”，没有真正静摩擦，所以脚会比较容易滑
-        当前已实现最小切向弹簧阻尼:
-            F_t = -k_t * Δx_t - c_t * v_t，再裁到 ||F_t|| <= mu * F_n
-            其中 Δx_t 是每只脚每个环境各自维护的 world-frame 切向弹簧位移
-            接触建立后按切向速度积分；接触断开/reset 时清零；超过摩擦锥时回投影到 slip 状态
-            这样能提供最小 stick-slip 行为，脚底不再只靠切向阻尼撑住
+        当前版本使用切向阻尼 + 库仑摩擦限幅:
+            先按 F_t = -c_t * v_t 计算切向阻尼力
+            再裁到 ||F_t|| <= mu * F_n
+            不再维护切向弹簧位移、touchdown anchor 或 stick-slip 状态
+            优点是实现简单、无接触历史状态、数值行为更直接
+            缺点是没有静摩擦，脚或球更容易持续滑动
         目前实现仍然是平地 + 单点脚接触，不是完整脚底支撑面模型
 
     对于完成替换接触模型有三种选择：
@@ -39,6 +37,5 @@
         foot_contact 当前参数包括：
             contact_normal_stiffness
             contact_normal_damping
-            contact_tangential_stiffness
             contact_tangential_damping
             contact_friction_coeff

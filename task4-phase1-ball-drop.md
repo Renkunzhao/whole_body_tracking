@@ -15,8 +15,11 @@
 
 ## 力模型
 - 当前球的自定义支撑已切到与机器人共用的点接触模型
-- 接触点取球底点，默认 offset 为 `(0, 0, -ball_radius)`
+- 当前简化版直接以球心作为接触参考点，不再使用球底点 offset
 - 法向和切向力都由 [point_foot_contact_force.py](/home/rkz/code/whole_body_tracking/source/whole_body_tracking/whole_body_tracking/utils/point_foot_contact_force.py) 统一计算
+- 切向响应现在是“切向阻尼 + 库仑摩擦限幅”
+- 先按 `F_t = -c_t * v_t` 计算，再裁剪到 `||F_t|| <= mu * ||F_n||`
+- 不再维护 touchdown anchor，也不再保留切向弹簧状态
 
 ## Demo 默认参数
 - `stiffness=5000.0`
@@ -36,8 +39,9 @@
 ```
 
 ## 日志检查点
-- 球底高于参考平面时，`penetration=0` 且 `force_z=0`
-- 球进入平面后，`penetration>0` 且 `force_z>0`
+- 当前简化版以球心高度作为接触参考
+- 球心高于参考平面时，`penetration=0` 且 `force_z=0`
+- 球心进入平面后，`penetration>0` 且 `force_z>0`
 - 球离开接触区后，`force_z` 会回到 `0`
 
 ## 后续接回 training 的约束

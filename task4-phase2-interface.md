@@ -10,31 +10,28 @@
 - 保留纯 tensor 模块 `source/whole_body_tracking/whole_body_tracking/utils/point_foot_contact_force.py`：
   - `PointFootContactForceCfg`
   - `PointFootContactForceModel.compute_wrenches(...)`
-- 接触模型保持为“平地 + 每只脚单接触点 + 接触点施力”：
+- 当前接触模型保持为“平地 + 每个接触 body 原点上的简化支撑力”：
   - 接触 body 为 `left_ankle_roll_link`、`right_ankle_roll_link`
-  - 局部接触点偏移固定取 G1 foot frame：`(0.04, 0.0, -0.037)`
   - 地面高度默认 env-local `z=0.0`
-  - 接触点速度：`v_cp = v_body + omega x r`
+  - 接触位置直接取 body origin
+  - 接触速度直接取 body linear velocity
   - 法向力：`F_n = max(k_n * penetration - c_n * v_n, 0)`
-  - 切向力：`F_t = -k_t * Δx_t - c_t * v_t`，并裁剪到 `||F_t|| <= mu * ||F_n||`
-  - `Δx_t` 为每只脚维护的切向弹簧位移；接触建立后积分切向速度，接触断开和 reset 时清零
-  - 写回 wrench 时使用 `force = F_n + F_t`，`torque = r x force`
+  - 切向力先按阻尼计算：`F_t = -c_t * v_t`
+  - 再裁剪到库仑摩擦上限：`||F_t|| <= mu * ||F_n||`
+  - 不再维护 touchdown anchor，也不再保留切向弹簧状态
+  - 写回 wrench 时使用 `force = F_n + F_t`，`torque = 0`
 - `tasks/tracking/mdp/actions.py` 中将正常 PD 和脚地接触拆成两个 action term：
   - `joint_pos` 使用标准 joint position PD
   - `foot_contact` 使用 `contact_*` 字段并逐 physics substep 施加自定义接触 wrench
-  - `foot_contact` 内部维护每只脚的切向弹簧状态，实现最小 stick-slip
   - 不再保留 `collision_filtered_body_names`
   - 不再提供 `initialize_ground_collision_filter()`
   - `foot_contact.reset()` 时清零 persistent wrench
-  - `foot_contact.reset()` 和离地时同时清零切向弹簧位移
 - `tracking_env_cfg.py` 中 `joint_pos` 和 `foot_contact` 分开配置，默认 `foot_contact.contact_enabled=False`
 - `config/g1/flat_env_cfg.py` 只保留 G1 专属接触参数：
   - `contact_body_names = ["left_ankle_roll_link", "right_ankle_roll_link"]`
-  - `contact_point_offsets_local = ((0.04, 0.0, -0.037), (0.04, 0.0, -0.037))`
 - 自定义接触参数包含：
   - `contact_normal_stiffness`
   - `contact_normal_damping`
-  - `contact_tangential_stiffness`
   - `contact_tangential_damping`
   - `contact_friction_coeff`
 - `source/whole_body_tracking/whole_body_tracking/robots/g1.py` 改为使用去掉下肢碰撞的 URDF：
@@ -65,15 +62,15 @@
   - `env.actions.foot_contact.contact_enabled=true`
 - 关闭自定义接触、但保持使用 no-lower-leg-collision URDF：
   - 机器人应明显下沉，证明支撑不再来自 PhysX 地面碰撞
-- 将 `env.actions.foot_contact.contact_tangential_damping=0` 或 `env.actions.foot_contact.contact_friction_coeff=0`：
-  - 应出现更明显打滑，验证切向力通路生效
-- 将 `env.actions.foot_contact.contact_tangential_stiffness=0`：
-  - 会退化回接近“纯切向阻尼 + 动摩擦”的行为，脚更容易滑
+- 将 `env.actions.foot_contact.contact_tangential_damping=0`：
+  - 将失去速度相关的切向耗散，更容易水平滑动
+- 将 `env.actions.foot_contact.contact_friction_coeff=0`：
+  - 应几乎失去切向支撑，更明显打滑
 - reset 后确认 persistent wrench 被清零
 
 ## 假设与默认
 - Phase 2 只做 `Tracking-Flat-G1-*`，不提前抽象到 GO2 或其它 humanoid
 - 只做平地，不做 rough terrain 法向查询
-- 每只脚单接触点是刻意简化；后续如果要更真实支撑面，再扩到两点或四点脚底
+- 当前每只脚以接触 body 原点近似支撑点；后续如果要更真实支撑面，再扩到多点脚底
 - ball 的自定义 spring 路径已并入统一的点接触模型，不再单独维护 `spring_terrain.py`
 - 当前优先保证“下肢地面碰撞确实消失、自定义接触确实接管”，暂不处理由此带来的 reward / termination 设计细化

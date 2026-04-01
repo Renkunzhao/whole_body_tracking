@@ -22,12 +22,12 @@ from isaaclab.app import AppLauncher
 
 
 parser = argparse.ArgumentParser(description="Load G1, Go2, or ball on a built-in or custom trampoline.")
-parser.add_argument("--actor", type=str, choices=("g1", "go2", "ball"), default="g1", help="Actor placed on the trampoline.")
+parser.add_argument("--actor", type=str, choices=("g1", "go2", "ball"), default="go2", help="Actor placed on the trampoline.")
 parser.add_argument(
     "--trampoline_mode",
     type=str,
     choices=("builtin", "spring"),
-    default="builtin",
+    default="spring",
     help="Trampoline implementation to use.",
 )
 parser.add_argument("--num_envs", type=int, default=1, help="Number of scene instances to spawn.")
@@ -44,11 +44,10 @@ parser.add_argument("--youngs_modulus", type=float, default=8.0e4, help="Built-i
 parser.add_argument("--mass", type=float, default=10.0, help="Built-in trampoline mass.")
 parser.add_argument("--sim_resolution", type=int, default=10, help="Built-in trampoline hexahedral resolution.")
 
-# custom spring model options
+# custom contact model options
 parser.add_argument("--normal_stiffness", type=float, default=5000.0, help="Custom model normal stiffness.")
 parser.add_argument("--normal_damping", type=float, default=120.0, help="Custom model normal damping.")
-parser.add_argument("--tangential_stiffness", type=float, default=2000.0, help="Custom model tangential stiffness.")
-parser.add_argument("--tangential_damping", type=float, default=75.0, help="Custom model tangential damping.")
+parser.add_argument("--tangential_damping", type=float, default=120.0, help="Custom model tangential damping.")
 parser.add_argument("--friction_coeff", type=float, default=1.0, help="Custom model friction coefficient.")
 
 # ball options
@@ -243,7 +242,6 @@ def _build_spring_model() -> PointFootContactForceModel:
             plane_height=0.0,
             normal_stiffness=args_cli.normal_stiffness,
             normal_damping=args_cli.normal_damping,
-            tangential_stiffness=args_cli.tangential_stiffness,
             tangential_damping=args_cli.tangential_damping,
             friction_coeff=args_cli.friction_coeff,
         )
@@ -266,7 +264,6 @@ def _build_spring_runtime(
     scalar_shape = (num_envs, num_bodies)
     return {
         "model": _build_spring_model(),
-        "tangential_displacement_w": torch.zeros((*scalar_shape, 3), device=device),
         **{key: torch.zeros(scalar_shape, device=device) for key in SPRING_RUNTIME_SCALAR_KEYS},
         **extra,
     }
@@ -306,14 +303,12 @@ def clear_robot_spring_contact(robot: Articulation, runtime: dict[str, object]) 
         body_ids=body_ids,
         is_global=True,
     )
-    runtime["tangential_displacement_w"].zero_()
     for key in SPRING_RUNTIME_SCALAR_KEYS:
         runtime[key].zero_()
 
 
 def clear_ball_spring_contact(ball: RigidObject, runtime: dict[str, object]) -> None:
     clear_ball_wrench(ball)
-    runtime["tangential_displacement_w"].zero_()
     runtime["last_force_w"].zero_()
     for key in SPRING_RUNTIME_SCALAR_KEYS:
         runtime[key].zero_()
@@ -328,24 +323,20 @@ def apply_robot_spring_contact(
     num_bodies = len(body_ids)
     data = robot.data
     body_pos_w = data.body_pos_w[:, body_ids]
+    body_lin_vel_w = data.body_lin_vel_w[:, body_ids]
     env_origins = scene.env_origins.unsqueeze(1).expand(-1, num_bodies, -1)
 
-    force_w, _, _, penetration, normal_force, tangential_force_norm, _, tangential_displacement_w = runtime[
-        "model"
-    ].compute_wrenches(
+    force_w, _, _, penetration, normal_force, tangential_force_norm, _ = runtime["model"].compute_wrenches(
         body_pos_w.reshape(-1, 3),
-        data.body_quat_w[:, body_ids].reshape(-1, 4),
-        data.body_lin_vel_w[:, body_ids].reshape(-1, 3),
-        data.body_ang_vel_w[:, body_ids].reshape(-1, 3),
-        torch.zeros_like(body_pos_w).reshape(-1, 3),
+        body_lin_vel_w.reshape(-1, 3),
         env_origins=env_origins.reshape(-1, 3),
-        tangential_displacement_w=runtime["tangential_displacement_w"].reshape(-1, 3),
-        dt=scene.physics_dt,
     )
+    print(f"body_pos_w={body_pos_w.reshape(-1, 3)}")
+    print(f"body_lin_vel_w={body_lin_vel_w.reshape(-1, 3)}")
+    print(f"force_w={force_w}")
 
     force_w = force_w.view(scene.num_envs, num_bodies, 3)
     runtime.update(
-        tangential_displacement_w=tangential_displacement_w.view(scene.num_envs, num_bodies, 3),
         last_penetration=penetration.view(scene.num_envs, num_bodies),
         last_normal_force=normal_force.view(scene.num_envs, num_bodies),
         last_tangential_force_norm=tangential_force_norm.view(scene.num_envs, num_bodies),
@@ -364,21 +355,13 @@ def apply_ball_spring_contact(
     ball: RigidObject,
     runtime: dict[str, object],
 ) -> None:
-    force_w, _, _, penetration, normal_force, tangential_force_norm, _, tangential_displacement_w = runtime[
-        "model"
-    ].compute_wrenches(
+    force_w, _, _, penetration, normal_force, tangential_force_norm, _ = runtime["model"].compute_wrenches(
         ball.data.root_pos_w,
-        ball.data.root_quat_w,
         ball.data.root_lin_vel_w,
-        ball.data.root_ang_vel_w,
-        torch.zeros_like(ball.data.root_pos_w),
         env_origins=scene.env_origins,
-        tangential_displacement_w=runtime["tangential_displacement_w"].reshape(-1, 3),
-        dt=scene.physics_dt,
     )
 
     runtime.update(
-        tangential_displacement_w=tangential_displacement_w.view(scene.num_envs, 1, 3),
         last_penetration=penetration.view(scene.num_envs, 1),
         last_normal_force=normal_force.view(scene.num_envs, 1),
         last_tangential_force_norm=tangential_force_norm.view(scene.num_envs, 1),
@@ -400,12 +383,6 @@ def print_mode_summary(surface_height: float, ball_height: float | None) -> None
     if args_cli.actor == "ball" and ball_height is not None:
         summary += f", ball_height={ball_height:.3f}"
     print(summary)
-    if args_cli.trampoline_mode == "spring" and args_cli.actor == "ball":
-        print("[INFO]: Custom ball mode uses the simplified body-origin spring model.")
-    if args_cli.trampoline_mode == "spring" and args_cli.actor == "g1":
-        print("[INFO]: Custom G1 mode uses the simplified ankle-link-origin spring model.")
-    if args_cli.trampoline_mode == "spring" and args_cli.actor == "go2":
-        print("[INFO]: Custom Go2 mode uses the simplified foot-link-origin spring model.")
 
 
 def main() -> None:
