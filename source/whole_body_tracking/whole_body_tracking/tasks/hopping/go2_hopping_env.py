@@ -21,10 +21,6 @@ from whole_body_tracking.tasks.hopping.symmetry import GO2_JUMP_ACTION_PERMUTATI
 from whole_body_tracking.tasks.tracking.mdp.events import randomize_rigid_body_com
 from whole_body_tracking.utils.trampoline_deformable import (
     build_trampoline_kinematic_targets,
-    build_trampoline_visual_translate_ops,
-    reset_deformable_trampoline,
-    trampoline_center_heights,
-    update_trampoline_visual_height,
 )
 
 
@@ -746,33 +742,6 @@ class Go2HoppingEnv(DirectRLEnv):
         names += ["env_friction", "body_mass_div10", "stance_mask_left", "stance_mask_right"]
         names += ["foot_contact_fl", "foot_contact_fr", "foot_contact_rl", "foot_contact_rr"]
         return names
-
-    def get_export_metadata(self, run_path: str) -> dict[str, object]:
-        metadata = {
-            "run_path": run_path,
-            "joint_names": list(self._canonical_joint_names),
-            "joint_stiffness": self._robot.data.joint_stiffness[0, self._canonical_joint_ids].cpu().tolist(),
-            "joint_damping": self._robot.data.joint_damping[0, self._canonical_joint_ids].cpu().tolist(),
-            "default_joint_pos": self._default_dof_pos[0].cpu().tolist(),
-            "command_names": ["lin_vel_x", "lin_vel_y", "ang_vel_yaw", "heading"],
-            "observation_names": self._policy_obs_names,
-            "observation_history_lengths": [self._policy_frame_stack] * len(self._policy_obs_names),
-            "critic_observation_names": self._critic_obs_names,
-            "critic_observation_history_lengths": [self._critic_frame_stack] * len(self._critic_obs_names),
-            "action_scale": self._action_scale.squeeze(0).cpu().tolist(),
-            "anchor_body_name": self.cfg.anchor_body_name,
-            "body_names": list(self._robot.data.body_names),
-            "symmetry_observation_frame_permutation": list(GO2_JUMP_OBS_PERMUTATION),
-            "symmetry_action_permutation": list(GO2_JUMP_ACTION_PERMUTATION),
-        }
-        if self._has_trampoline:
-            metadata.update({
-                "trampoline_radius": self.cfg.trampoline_radius,
-                "trampoline_pin_width": self.cfg.trampoline_pin_width,
-                "trampoline_surface_height": self.cfg.trampoline_surface_height,
-                "usable_radius": self.cfg.usable_radius,
-            })
-        return metadata
 
     def _reward_jump(self) -> torch.Tensor:
         contact = self._contact_forces[:, self._contact_foot_body_ids, 2] > 5.0

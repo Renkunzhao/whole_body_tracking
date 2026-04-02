@@ -49,14 +49,17 @@ class Go2FlatEnvCfg(TrackingEnvCfg):
         self.commands.motion.body_names = list(GO2_TRACKING_BODY_NAMES)
 
         self.events.base_com.params['asset_cfg'] = SceneEntityCfg('robot', body_names=GO2_TRACKING_ANCHOR_BODY_NAME)
-        self.events.physics_material.func = mdp.randomize_rigid_body_material_shared
         self.events.physics_material.params['asset_cfg'] = SceneEntityCfg('robot', body_names=list(GO2_FOOT_BODY_NAMES))
         self.events.physics_material.params['static_friction_range'] = (0.3, 1.2)
         self.events.physics_material.params['dynamic_friction_range'] = (0.3, 1.2)
         self.events.physics_material.params['restitution_range'] = (0.0, 0.0)
         self.events.physics_material.params['make_consistent'] = True
 
+        self.rewards.motion_global_anchor_pos.weight = 1.5
+        self.rewards.motion_global_anchor_pos.params['std'] = 0.2
         self.rewards.motion_global_anchor_ori.weight = 1.5
+        self.rewards.motion_body_pos.weight = 1.5
+        self.rewards.motion_body_pos.params['std'] = 0.2
         self.rewards.motion_body_ang_vel.weight = 2.0
         self.rewards.motion_body_ang_vel.params['std'] = 6.28
         # mjlab's Go2 setup keeps the self-collision cost effectively inactive for this task.

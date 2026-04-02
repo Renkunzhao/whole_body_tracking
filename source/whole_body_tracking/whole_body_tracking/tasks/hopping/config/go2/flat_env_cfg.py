@@ -280,12 +280,3 @@ def go2_hopping_trampoline_env_cfg() -> Go2HoppingFlatEnvCfg:
     if _is_play_mode():
         cfg = _apply_play_overrides(cfg)
     return cfg
-
-
-def go2_hopping_flat_tracking_cfg_env_cfg() -> Go2HoppingFlatEnvCfg:
-    cfg = Go2HoppingFlatEnvCfg()
-    cfg.robot = GO2_CFG.replace(prim_path="/World/envs/env_.*/Robot")
-    cfg.action_scale = _ordered_action_scale(GO2_ACTION_SCALE)
-    if _is_play_mode():
-        cfg = _apply_play_overrides(cfg)
-    return cfg

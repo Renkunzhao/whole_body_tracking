@@ -34,7 +34,11 @@
         "Tracking-Flat-G1-v0",
         "Tracking-Flat-G1-Wo-State-Estimation-v0",
         "Tracking-Flat-G1-Low-Freq-v0",
-        "Tracking-Trampoline-G1-v0"
+        "Tracking-Trampoline-G1-v0",
+        "Tracking-Flat-Go2-v0",
+        "Tracking-Flat-Go2-Wo-State-Estimation-v0",
+        "Hopping-Flat-Go2-v0",
+        "Hopping-Trampoline-Go2-v0",
       ]
     },
     {
@@ -88,6 +92,22 @@
       "problemMatcher": []
     },
     {
+      "label": "Convert Motion (Go2)",
+      "type": "shell",
+      "command": "conda",
+      "args": [
+        "run",
+        "--no-capture-output",
+        "-n", "isaaclab",
+        "python", "convert_gc_go2.py",
+        "--input_file", "${input:input_file}", 
+        "--input_fps", "${input:input_fps}", 
+        "--output_name", "wbt-${input:output_name}", 
+      ],
+      "options": { "cwd": "${workspaceFolder}/scripts" },
+      "problemMatcher": []
+    },
+    {
       "label": "Train",
       "type": "shell",
       "command": "conda",
@@ -97,8 +117,9 @@
         "-n", "isaaclab",
         "python", "rsl_rl/train.py",
         "--task", "${input:Task}", 
-        "--video",
-        "--video_interval", "${input:video_interval}",
+        "--headless",
+        // "--video",
+        // "--video_interval", "${input:video_interval}",
         "--registry_name", "${input:registry_name}",
         "--logger", "wandb", 
         "--log_project_name", "WBT", 

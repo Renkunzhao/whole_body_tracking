@@ -15,7 +15,7 @@ gym.register(
 
 
 gym.register(
-    id="Tracking-Flat-Go2-No-State-Estimation-v0",
+    id="Tracking-Flat-Go2-Wo-State-Estimation-v0",
     entry_point="isaaclab.envs:ManagerBasedRLEnv",
     disable_env_checker=True,
     kwargs={
