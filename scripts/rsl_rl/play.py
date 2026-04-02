@@ -3,7 +3,22 @@
 """Launch Isaac Sim Simulator first."""
 
 import argparse
+import os
+import pathlib
 import sys
+
+
+def _add_repo_source_to_path():
+    for parent in pathlib.Path(__file__).resolve().parents:
+        candidate = parent / "source" / "whole_body_tracking"
+        if candidate.is_dir():
+            candidate_str = str(candidate)
+            if candidate_str not in sys.path:
+                sys.path.insert(0, candidate_str)
+            return
+
+
+_add_repo_source_to_path()
 
 from isaaclab.app import AppLauncher
 
@@ -20,6 +35,15 @@ parser.add_argument(
 parser.add_argument("--num_envs", type=int, default=None, help="Number of environments to simulate.")
 parser.add_argument("--task", type=str, default=None, help="Name of the task.")
 parser.add_argument("--motion_file", type=str, default=None, help="Path to the motion file.")
+parser.add_argument(
+    "--checkpoint_path",
+    type=str,
+    default=None,
+    help="Path to a checkpoint file. Can be absolute or relative to the workspace.",
+)
+parser.add_argument("--command_vx", type=float, default=None, help="Fixed commanded forward velocity for hopping play.")
+parser.add_argument("--command_vy", type=float, default=None, help="Fixed commanded lateral velocity for hopping play.")
+parser.add_argument("--command_yaw", type=float, default=None, help="Fixed commanded yaw rate for hopping play.")
 # append RSL-RL cli arguments
 cli_args.add_rsl_rl_args(parser)
 # append AppLauncher cli args
@@ -39,8 +63,6 @@ simulation_app = app_launcher.app
 """Rest everything follows."""
 
 import gymnasium as gym
-import os
-import pathlib
 import torch
 
 from rsl_rl.runners import OnPolicyRunner
@@ -59,13 +81,72 @@ from isaaclab_tasks.utils.hydra import hydra_task_config
 
 # Import extensions to set up environment tasks
 import whole_body_tracking.tasks  # noqa: F401
-from whole_body_tracking.utils.exporter import attach_onnx_metadata, export_motion_policy_as_onnx
+from whole_body_tracking.utils.exporter import attach_onnx_metadata, export_motion_policy_as_onnx, export_policy_as_onnx
+from whole_body_tracking.utils.task_utils import env_cfg_requires_motion, env_requires_motion
+
+
+def _download_wandb_checkpoint(wandb_path: str) -> tuple[str, str, object]:
+    import wandb
+
+    run_path = wandb_path
+    api = wandb.Api()
+    if "model" in wandb_path:
+        run_path = "/".join(wandb_path.split("/")[:-1])
+    wandb_run = api.run(run_path)
+    files = [file.name for file in wandb_run.files() if "model" in file.name]
+    if "model" in wandb_path:
+        file = wandb_path.split("/")[-1]
+    else:
+        file = max(files, key=lambda x: int(x.split("_")[1].split(".")[0]))
+
+    wandb_file = wandb_run.file(str(file))
+    wandb_file.download("./logs/rsl_rl/temp", replace=True)
+
+    print(f"[INFO]: Loading model checkpoint from: {run_path}/{file}")
+    resume_path = f"./logs/rsl_rl/temp/{file}"
+    return resume_path, run_path, wandb_run
+
+
+def _configure_manual_command_for_play(env) -> None:
+    if all(value is None for value in (args_cli.command_vx, args_cli.command_vy, args_cli.command_yaw)):
+        return
+
+    vx = 0.0 if args_cli.command_vx is None else args_cli.command_vx
+    vy = 0.0 if args_cli.command_vy is None else args_cli.command_vy
+    yaw = 0.0 if args_cli.command_yaw is None else args_cli.command_yaw
+
+    if hasattr(env.unwrapped, "set_manual_command"):
+        env.unwrapped.set_manual_command(vx, vy, yaw)
+        print(f"[INFO]: Using fixed hopping command vx={vx:.3f}, vy={vy:.3f}, yaw={yaw:.3f}")
+    else:
+        print("[INFO]: Ignoring fixed command override because this task does not support manual play commands.")
+
+
+def _configure_motion_source_for_play(env_cfg, motion_file: str | None, wandb_run) -> None:
+    if not env_cfg_requires_motion(env_cfg):
+        if motion_file is not None:
+            print("[INFO]: Ignoring --motion_file for non-motion task.")
+        return
+
+    if motion_file is not None:
+        print(f"[INFO]: Using motion file from CLI: {motion_file}")
+        env_cfg.commands.motion.motion_file = motion_file
+        return
+
+    if wandb_run is not None:
+        art = next((artifact for artifact in wandb_run.used_artifacts() if artifact.type == "motions"), None)
+        if art is None:
+            raise ValueError("No motion artifact found in the specified W&B run.")
+        env_cfg.commands.motion.motion_file = str(pathlib.Path(art.download()) / "motion.npz")
+        return
+
+    raise ValueError("--motion_file is required when playing a motion-based task from a local checkpoint.")
 
 
 @hydra_task_config(args_cli.task, "rsl_rl_cfg_entry_point")
 def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agent_cfg: RslRlOnPolicyRunnerCfg):
     """Play with RSL-RL agent."""
-    agent_cfg: RslRlOnPolicyRunnerCfg = cli_args.parse_rsl_rl_cfg(args_cli.task, args_cli)
+    agent_cfg = cli_args.parse_rsl_rl_cfg(args_cli.task, args_cli)
     env_cfg.scene.num_envs = args_cli.num_envs if args_cli.num_envs is not None else env_cfg.scene.num_envs
     env_cfg.viewer.origin_type = "world"
     env_cfg.viewer.asset_name = None
@@ -78,54 +159,30 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     env_cfg.commands.motion.joint_position_range = (0.0, 0.0)
     env_cfg.commands.motion.sampling_mode = "start"
 
-    # specify directory for logging experiments
     log_root_path = os.path.join("logs", "rsl_rl", agent_cfg.experiment_name)
     log_root_path = os.path.abspath(log_root_path)
 
+    wandb_run = None
+    run_path_for_metadata = "none"
     if args_cli.wandb_path:
-        import wandb
-
-        run_path = args_cli.wandb_path
-
-        api = wandb.Api()
-        if "model" in args_cli.wandb_path:
-            run_path = "/".join(args_cli.wandb_path.split("/")[:-1])
-        wandb_run = api.run(run_path)
-        # loop over files in the run
-        files = [file.name for file in wandb_run.files() if "model" in file.name]
-        # files are all model_xxx.pt find the largest filename
-        if "model" in args_cli.wandb_path:
-            file = args_cli.wandb_path.split("/")[-1]
-        else:
-            file = max(files, key=lambda x: int(x.split("_")[1].split(".")[0]))
-
-        wandb_file = wandb_run.file(str(file))
-        wandb_file.download("./logs/rsl_rl/temp", replace=True)
-
-        print(f"[INFO]: Loading model checkpoint from: {run_path}/{file}")
-        resume_path = f"./logs/rsl_rl/temp/{file}"
-
-        if args_cli.motion_file is not None:
-            print(f"[INFO]: Using motion file from CLI: {args_cli.motion_file}")
-            env_cfg.commands.motion.motion_file = args_cli.motion_file
-
-        art = next((a for a in wandb_run.used_artifacts() if a.type == "motions"), None)
-        if art is None:
-            print("[WARN] No model artifact found in the run.")
-        else:
-            env_cfg.commands.motion.motion_file = str(pathlib.Path(art.download()) / "motion.npz")
-
+        resume_path, run_path_for_metadata, wandb_run = _download_wandb_checkpoint(args_cli.wandb_path)
+    elif args_cli.checkpoint_path:
+        resume_path = os.path.abspath(args_cli.checkpoint_path)
+        if not os.path.isfile(resume_path):
+            raise FileNotFoundError(f"Checkpoint file not found: {resume_path}")
+        run_path_for_metadata = resume_path
+        print(f"[INFO]: Loading model checkpoint from: {resume_path}")
     else:
         print(f"[INFO] Loading experiment from directory: {log_root_path}")
         resume_path = get_checkpoint_path(log_root_path, agent_cfg.load_run, agent_cfg.load_checkpoint)
         print(f"[INFO]: Loading model checkpoint from: {resume_path}")
 
-    # create isaac environment
-    env = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None)
+    _configure_motion_source_for_play(env_cfg, args_cli.motion_file, wandb_run)
 
+    env = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None)
+    _configure_manual_command_for_play(env)
     log_dir = os.path.dirname(resume_path)
 
-    # wrap for video recording
     if args_cli.video:
         video_kwargs = {
             "video_folder": os.path.join(log_dir, "videos", "play"),
@@ -137,22 +194,34 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         print_dict(video_kwargs, nesting=4)
         env = gym.wrappers.RecordVideo(env, **video_kwargs)
 
-    # convert to single-agent instance if required by the RL algorithm
     if isinstance(env.unwrapped, DirectMARLEnv):
         env = multi_agent_to_single_agent(env)
 
-    # wrap around environment for rsl-rl
-    env = RslRlVecEnvWrapper(env)
+    env = RslRlVecEnvWrapper(env, clip_actions=agent_cfg.clip_actions)
 
-    # load previously trained model
     ppo_runner = OnPolicyRunner(env, agent_cfg.to_dict(), log_dir=None, device=agent_cfg.device)
     ppo_runner.load(resume_path)
 
-    # obtain the trained policy for inference
     policy = ppo_runner.get_inference_policy(device=env.unwrapped.device)
+    obs_normalizer = getattr(ppo_runner, "obs_normalizer", None)
 
-    # export policy to onnx/jit
     export_model_dir = os.path.join(os.path.dirname(resume_path), "exported")
+    if env_requires_motion(env.unwrapped):
+        export_motion_policy_as_onnx(
+            env.unwrapped,
+            ppo_runner.alg.policy,
+            normalizer=obs_normalizer,
+            path=export_model_dir,
+            filename="policy.onnx",
+        )
+    else:
+        export_policy_as_onnx(
+            ppo_runner.alg.policy,
+            normalizer=obs_normalizer,
+            path=export_model_dir,
+            filename="policy.onnx",
+        )
+    attach_onnx_metadata(env.unwrapped, run_path_for_metadata, export_model_dir)
 
     export_motion_policy_as_onnx(
         env.unwrapped,
@@ -164,26 +233,20 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     # reset environment
     obs = env.get_observations()
     timestep = 0
-    # simulate environment
     while simulation_app.is_running():
-        # run everything in inference mode
         with torch.inference_mode():
-            # agent stepping
             actions = policy(obs)
-            # env stepping
-            obs, _, _, _ = env.step(actions)
+            step_output = env.step(actions)
+            obs = step_output[0] if isinstance(step_output, tuple) else step_output
         if args_cli.video:
             timestep += 1
-            # Exit the play loop after recording one video
             if timestep == args_cli.video_length:
                 break
 
-    # close the simulator
     env.close()
 
 
 if __name__ == "__main__":
-    # run the main function
+    os.environ["WHOLE_BODY_TRACKING_PLAY_MODE"] = "1"
     main()
-    # close sim app
     simulation_app.close()
