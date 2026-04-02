@@ -13,14 +13,15 @@ from isaaclab.terrains import TerrainImporterCfg
 from isaaclab.utils import configclass
 
 from whole_body_tracking.robots.go2 import (
-    GO2_ACTION_SCALE,
-    GO2_CFG,
     GO2_CSV_JOINT_NAMES,
     GO2_FOOT_BODY_NAMES,
     GO2_NON_FOOT_CONTACT_BODY_NAMES,
     GO2_TRACKING_ANCHOR_BODY_NAME,
+    get_go2_actuators,
+    get_go2_cfg,
+    get_go2_init_state,
+    get_go2_spawn_cfg,
 )
-from whole_body_tracking.robots.go2_hopping import GO2_HOPPING_ACTION_SCALE_MAP, GO2_HOPPING_CFG
 from whole_body_tracking.utils.trampoline_deformable import (
     TRAMPOLINE_PIN_WIDTH,
     TRAMPOLINE_RADIUS,
@@ -34,9 +35,53 @@ def _ordered_action_scale(action_scale_map: dict[str, float]) -> tuple[float, ..
     return tuple(float(action_scale_map[joint_name]) for joint_name in GO2_CSV_JOINT_NAMES)
 
 
+GO2_HOPPING_DEFAULT_JOINT_POS = {
+    "FL_hip_joint": 0.1,
+    "RL_hip_joint": 0.1,
+    "FR_hip_joint": -0.1,
+    "RR_hip_joint": -0.1,
+    "FL_thigh_joint": 0.8,
+    "RL_thigh_joint": 1.0,
+    "FR_thigh_joint": 0.8,
+    "RR_thigh_joint": 1.0,
+    "FL_calf_joint": -1.5,
+    "RL_calf_joint": -1.5,
+    "FR_calf_joint": -1.5,
+    "RR_calf_joint": -1.5,
+}
+GO2_HOPPING_ACTION_SCALE = 0.25
+GO2_HOPPING_TERMINATION_BODY_NAMES = (GO2_TRACKING_ANCHOR_BODY_NAME,)
 GO2_HOPPING_PENALIZED_CONTACT_BODY_NAMES = tuple(
     name for name in GO2_NON_FOOT_CONTACT_BODY_NAMES if "thigh" in name or "calf" in name
 )
+GO2_HOPPING_CFG = get_go2_cfg(
+    spawn=get_go2_spawn_cfg(
+        enabled_self_collisions=True,
+        max_depenetration_velocity=1.0,
+        solver_position_iteration_count=4,
+        solver_velocity_iteration_count=0,
+        contact_offset=0.01,
+        rest_offset=0.0,
+        enable_gyroscopic_forces=True,
+    ),
+    init_state=get_go2_init_state(
+        pos=(0.0, 0.0, 0.42),
+        joint_pos=GO2_HOPPING_DEFAULT_JOINT_POS,
+    ),
+    actuators=get_go2_actuators(
+        hip_thigh_stiffness=20.0,
+        hip_thigh_damping=0.5,
+        hip_thigh_armature=0.0,
+        hip_thigh_effort_limit=23.7,
+        hip_thigh_velocity_limit=30.1,
+        calf_stiffness=20.0,
+        calf_damping=0.5,
+        calf_armature=0.0,
+        calf_effort_limit=45.43,
+        calf_velocity_limit=15.70,
+    ),
+)
+GO2_HOPPING_ACTION_SCALE_MAP = {name: GO2_HOPPING_ACTION_SCALE for name in GO2_CSV_JOINT_NAMES}
 
 
 @configclass
@@ -225,7 +270,7 @@ class Go2HoppingFlatEnvCfg(DirectRLEnvCfg):
     action_scale = _ordered_action_scale(GO2_HOPPING_ACTION_SCALE_MAP)
     foot_body_names = GO2_FOOT_BODY_NAMES
     penalized_contact_body_names = GO2_HOPPING_PENALIZED_CONTACT_BODY_NAMES
-    termination_body_names = (GO2_TRACKING_ANCHOR_BODY_NAME,)
+    termination_body_names = GO2_HOPPING_TERMINATION_BODY_NAMES
     non_foot_contact_body_names = GO2_NON_FOOT_CONTACT_BODY_NAMES
     anchor_body_name = GO2_TRACKING_ANCHOR_BODY_NAME
     contact_sensor: ContactSensorCfg = ContactSensorCfg(

@@ -8,11 +8,12 @@ from isaaclab.utils import configclass
 import whole_body_tracking.tasks.tracking.mdp as mdp
 from whole_body_tracking.robots.go2 import (
     GO2_ACTION_SCALE,
-    GO2_CFG,
     GO2_FOOT_BODY_NAMES,
     GO2_NON_FOOT_CONTACT_BODY_NAMES,
     GO2_TRACKING_ANCHOR_BODY_NAME,
     GO2_TRACKING_BODY_NAMES,
+    get_go2_cfg,
+    get_go2_spawn_cfg,
 )
 from whole_body_tracking.tasks.tracking.tracking_env_cfg import TrackingEnvCfg
 
@@ -35,12 +36,25 @@ def _apply_play_overrides(cfg: TrackingEnvCfg) -> TrackingEnvCfg:
     return cfg
 
 
+GO2_TRACKING_CFG = get_go2_cfg(
+    spawn=get_go2_spawn_cfg(
+        enabled_self_collisions=False,
+        max_depenetration_velocity=5.0,
+        solver_position_iteration_count=8,
+        solver_velocity_iteration_count=4,
+        contact_offset=0.005,
+        rest_offset=0.0,
+        enable_gyroscopic_forces=True,
+    )
+)
+
+
 @configclass
 class Go2FlatEnvCfg(TrackingEnvCfg):
     def __post_init__(self):
         super().__post_init__()
 
-        self.scene.robot = GO2_CFG.replace(prim_path='{ENV_REGEX_NS}/Robot')
+        self.scene.robot = GO2_TRACKING_CFG.replace(prim_path='{ENV_REGEX_NS}/Robot')
         self.viewer.body_name = GO2_TRACKING_ANCHOR_BODY_NAME
 
         self.actions.joint_pos.scale = GO2_ACTION_SCALE
