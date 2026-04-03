@@ -1,4 +1,14 @@
-# Sim-to-Real Legged Robot Hopping and Flipping on a Trampoline
+# Trampoline TODOs
+
+This file is the incremental backlog and work log for trampoline-related work in `whole_body_tracking`.
+
+## How To Use
+
+- Keep open work items in the backlog section.
+- Append newest progress entries to the work log section, ideally with dates.
+- When one backlog item turns into a substantial implementation thread, capture the detailed design in a dedicated `task-*.md` file and link it from here.
+
+## Backlog
 
 ## Task 1: Integrate Trampoline into Training with Domain Randomization
 
@@ -26,3 +36,7 @@ Adapt the existing humanoid (G1) whole-body motion tracking pipeline for quadrup
 ## Task 4: Custom contact model
 
 Replace trampoline with customized contact model
+
+## Work Log
+
+- `YYYY-MM-DD`: Add new entries here in reverse chronological order.
