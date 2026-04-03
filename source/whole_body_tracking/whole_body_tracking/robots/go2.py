@@ -71,7 +71,7 @@ GO2_NON_FOOT_CONTACT_BODY_NAMES = (
 GO2_HIP_AND_THIGH_JOINT_NAMES = tuple(name for name in GO2_CSV_JOINT_NAMES if not name.endswith("calf_joint"))
 GO2_CALF_JOINT_NAMES = tuple(name for name in GO2_CSV_JOINT_NAMES if name.endswith("calf_joint"))
 
-GO2_DEFAULT_INIT_POS = (0.0, 0.0, 0.278)
+GO2_DEFAULT_INIT_POS = (0.0, 0.0, 0.4)
 GO2_DEFAULT_JOINT_POS = {
     ".*_thigh_joint": 0.9,
     ".*_calf_joint": -1.8,
