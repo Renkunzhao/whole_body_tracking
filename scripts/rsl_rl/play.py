@@ -64,7 +64,7 @@ from isaaclab_tasks.utils.hydra import hydra_task_config
 import whole_body_tracking.tasks  # noqa: F401
 from isaaclab_rl.rsl_rl import export_policy_as_onnx
 from whole_body_tracking.utils.exporter import attach_onnx_metadata, export_motion_policy_as_onnx
-from whole_body_tracking.utils.task_utils import env_cfg_requires_motion
+from whole_body_tracking.utils.task_utils import apply_play_overrides, env_cfg_requires_motion
 
 def _configure_manual_command_for_play(env) -> None:
     if all(value is None for value in (args_cli.command_vx, args_cli.command_vy, args_cli.command_yaw)):
@@ -85,17 +85,9 @@ def _configure_manual_command_for_play(env) -> None:
 def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agent_cfg: RslRlOnPolicyRunnerCfg):
     """Play with RSL-RL agent."""
     agent_cfg: RslRlOnPolicyRunnerCfg = cli_args.parse_rsl_rl_cfg(args_cli.task, args_cli)
+    # Align with mjlab: play mode is chosen by this entry script, while env-specific overrides live on the config.
+    env_cfg = apply_play_overrides(env_cfg)
     env_cfg.scene.num_envs = args_cli.num_envs if args_cli.num_envs is not None else env_cfg.scene.num_envs
-    env_cfg.viewer.origin_type = "world"
-    env_cfg.viewer.asset_name = None
-    env_cfg.viewer.body_name = None
-    # env_cfg.terminations.anchor_pos = None
-    # env_cfg.terminations.anchor_ori = None
-    # env_cfg.terminations.ee_body_pos = None
-    # env_cfg.commands.motion.pose_range = {}
-    # env_cfg.commands.motion.velocity_range = {}
-    # env_cfg.commands.motion.joint_position_range = (0.0, 0.0)
-    # env_cfg.commands.motion.sampling_mode = "start"
 
     # specify directory for logging experiments
     log_root_path = os.path.join("logs", "rsl_rl", agent_cfg.experiment_name)

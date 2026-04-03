@@ -323,3 +323,6 @@ class TrackingEnvCfg(ManagerBasedRLEnvCfg):
         self.viewer.eye = (1.5, 1.5, 1.5)
         self.viewer.origin_type = "asset_root"
         self.viewer.asset_name = "robot"
+
+    def apply_play_overrides(self):
+        return self

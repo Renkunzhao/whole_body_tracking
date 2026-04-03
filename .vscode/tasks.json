@@ -37,6 +37,8 @@
         "Tracking-Trampoline-G1-v0",
         "Tracking-Flat-Go2-v0",
         "Tracking-Flat-Go2-Wo-State-Estimation-v0",
+        "Tracking-Trampoline-Go2-v0",
+        "Tracking-Trampoline-Go2-Wo-State-Estimation-v0",
         "Hopping-Flat-Go2-v0",
         "Hopping-Trampoline-Go2-v0",
       ]

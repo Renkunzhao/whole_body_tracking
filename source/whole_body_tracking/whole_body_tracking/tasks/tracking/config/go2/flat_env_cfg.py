@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import os
-
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.utils import configclass
 
@@ -16,24 +14,6 @@ from whole_body_tracking.robots.go2 import (
     get_go2_spawn_cfg,
 )
 from whole_body_tracking.tasks.tracking.tracking_env_cfg import TrackingEnvCfg
-
-
-def _is_play_mode() -> bool:
-    return os.environ.get('WHOLE_BODY_TRACKING_PLAY_MODE') == '1'
-
-
-def _apply_play_overrides(cfg: TrackingEnvCfg) -> TrackingEnvCfg:
-    cfg.episode_length_s = int(1e9)
-    cfg.observations.policy.enable_corruption = False
-    cfg.events.push_robot = None
-    cfg.commands.motion.pose_range = {}
-    cfg.commands.motion.velocity_range = {}
-    cfg.commands.motion.sampling_mode = 'start'
-    cfg.commands.motion.debug_vis = False
-    cfg.scene.contact_forces.debug_vis = False
-    # Keep the play camera static so manual mouse control is not overridden by asset tracking.
-    cfg.viewer.origin_type = 'world'
-    return cfg
 
 
 GO2_TRACKING_CFG = get_go2_cfg(
@@ -87,32 +67,23 @@ class Go2FlatEnvCfg(TrackingEnvCfg):
         self.terminations.ee_body_pos.params['threshold'] = 0.6
         self.terminations.ee_body_pos.params['body_names'] = list(GO2_FOOT_BODY_NAMES)
 
+    def apply_play_overrides(self):
+        self.episode_length_s = int(1e9)
+        self.observations.policy.enable_corruption = False
+        self.events.push_robot = None
+        self.commands.motion.pose_range = {}
+        self.commands.motion.velocity_range = {}
+        self.commands.motion.sampling_mode = "start"
+        self.commands.motion.debug_vis = False
+        self.scene.contact_forces.debug_vis = False
+        # Keep the play camera static so manual mouse control is not overridden by asset tracking.
+        self.viewer.origin_type = "world"
+        return self
+
 
 @configclass
-class Go2FlatNoStateEstimationEnvCfg(Go2FlatEnvCfg):
+class Go2FlatWoStateEstimationEnvCfg(Go2FlatEnvCfg):
     def __post_init__(self):
         super().__post_init__()
         self.observations.policy.motion_anchor_pos_b = None
         self.observations.policy.base_lin_vel = None
-
-
-def go2_flat_env_cfg() -> Go2FlatEnvCfg:
-    cfg = Go2FlatEnvCfg()
-    if _is_play_mode():
-        cfg = _apply_play_overrides(cfg)
-    return cfg
-
-
-def go2_flat_no_state_estimation_env_cfg() -> Go2FlatNoStateEstimationEnvCfg:
-    cfg = Go2FlatNoStateEstimationEnvCfg()
-    if _is_play_mode():
-        cfg = _apply_play_overrides(cfg)
-    return cfg
-
-
-# Backward-compatible alias while the public task name uses "No-State-Estimation".
-Go2FlatWoStateEstimationEnvCfg = Go2FlatNoStateEstimationEnvCfg
-
-
-def go2_flat_wo_state_estimation_env_cfg() -> Go2FlatNoStateEstimationEnvCfg:
-    return go2_flat_no_state_estimation_env_cfg()

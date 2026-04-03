@@ -10,14 +10,14 @@ This file is the incremental backlog and work log for trampoline-related work in
 
 ## Backlog
 
-## Task 1: Integrate Trampoline into Training with Domain Randomization
+## Task 1: Isaaclab - DeformableObject
 
 Incorporate a soft-body trampoline into the training environment, with domain randomization over `youngs_modulus` and `trampoline_mass`.
 
 **Ref:**
 - `/home/rkz/code/whole_body_tracking/scripts/trampoline.py`
 
-## Task 2: Port Hopping Behavior to Isaac Lab
+## Task 2: Go2 Hopping
 
 Migrate the existing hopping controller from IsaacGym to Isaac Lab.
 
@@ -25,7 +25,7 @@ Migrate the existing hopping controller from IsaacGym to Isaac Lab.
 - `/home/rkz/code/Isaacgym/src/My_unitree_go2_gym/legged_gym/envs/Go2_MoB/GO2_JUMP/go2_jump_env.py`
 - `/home/rkz/code/mjlab/src/mjlab/tasks/hopping/hopping_env_cfg.py`
 
-## Task 3: Adapt Humanoid Motion Tracking to Quadruped (Go2)
+## Task 3: Go2 Tracking
 
 Adapt the existing humanoid (G1) whole-body motion tracking pipeline for quadruped (Go2) use.
 
@@ -40,3 +40,4 @@ Replace trampoline with customized contact model
 ## Work Log
 
 - `YYYY-MM-DD`: Add new entries here in reverse chronological order.
+- `2026-04-02`: Tracking-Trampoline-Go2-v0 and Tracking-Flat-Go2-Wo-State-Estimation-v0
