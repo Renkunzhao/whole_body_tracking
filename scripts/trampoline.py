@@ -20,14 +20,13 @@ import argparse
 
 from isaaclab.app import AppLauncher
 
-
 parser = argparse.ArgumentParser(description="Load G1, Go2, or ball on a built-in or custom trampoline.")
 parser.add_argument("--actor", type=str, choices=("g1", "go2", "ball"), default="go2", help="Actor placed on the trampoline.")
 parser.add_argument(
     "--trampoline_mode",
     type=str,
     choices=("builtin", "spring"),
-    default="spring",
+    default="builtin",
     help="Trampoline implementation to use.",
 )
 parser.add_argument("--num_envs", type=int, default=1, help="Number of scene instances to spawn.")
@@ -39,10 +38,30 @@ parser.add_argument(
     help="If set for robot actors, do not command the default standing pose.",
 )
 # built-in deformable trampoline options
-parser.add_argument("--pin_width", type=float, default=0.4, help="Pinned rim width in meters for the deformable trampoline.")
-parser.add_argument("--youngs_modulus", type=float, default=8.0e4, help="Built-in trampoline Young's modulus.")
-parser.add_argument("--mass", type=float, default=10.0, help="Built-in trampoline mass.")
-parser.add_argument("--sim_resolution", type=int, default=10, help="Built-in trampoline hexahedral resolution.")
+parser.add_argument(
+    "--pin_width",
+    type=float,
+    default=None,
+    help="Pinned rim width in meters for the deformable trampoline. Defaults to the shared trampoline config.",
+)
+parser.add_argument(
+    "--youngs_modulus",
+    type=float,
+    default=None,
+    help="Built-in trampoline Young's modulus. Defaults to the shared trampoline config.",
+)
+parser.add_argument(
+    "--mass",
+    type=float,
+    default=None,
+    help="Built-in trampoline mass. Defaults to the shared trampoline config.",
+)
+parser.add_argument(
+    "--sim_resolution",
+    type=int,
+    default=None,
+    help="Built-in trampoline hexahedral resolution. Defaults to the shared trampoline config.",
+)
 
 # custom contact model options
 parser.add_argument("--normal_stiffness", type=float, default=5000.0, help="Custom model normal stiffness.")
@@ -85,12 +104,26 @@ from whole_body_tracking.robots.g1 import G1_CYLINDER_CFG
 from whole_body_tracking.robots.go2 import GO2_CFG
 from whole_body_tracking.utils.point_foot_contact_force import PointFootContactForceCfg, PointFootContactForceModel
 from whole_body_tracking.utils.trampoline_deformable import (
+    TRAMPOLINE_MASS,
+    TRAMPOLINE_PIN_WIDTH,
+    TRAMPOLINE_SIM_RESOLUTION,
     TRAMPOLINE_THICKNESS,
+    TRAMPOLINE_YOUNGS_MODULUS,
     build_trampoline_kinematic_targets,
     build_trampoline_node_visualizers,
     make_trampoline_cfg,
     update_trampoline_node_visualizers,
 )
+
+
+if args_cli.pin_width is None:
+    args_cli.pin_width = TRAMPOLINE_PIN_WIDTH
+if args_cli.youngs_modulus is None:
+    args_cli.youngs_modulus = TRAMPOLINE_YOUNGS_MODULUS
+if args_cli.mass is None:
+    args_cli.mass = TRAMPOLINE_MASS
+if args_cli.sim_resolution is None:
+    args_cli.sim_resolution = TRAMPOLINE_SIM_RESOLUTION
 
 
 SPRING_PLANE_RADIUS = 1.5
