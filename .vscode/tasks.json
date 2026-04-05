@@ -124,6 +124,7 @@
         // "--video",
         // "--video_interval", "${input:video_interval}",
         "--registry_name", "${input:registry_name}",
+        "--wandb_path", "${input:wandb_path}",
         "--logger", "wandb", 
         "--log_project_name", "WBT", 
         "--run_name", "wbt-${input:output_name}"

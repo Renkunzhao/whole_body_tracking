@@ -24,7 +24,7 @@ parser.add_argument("--num_envs", type=int, default=None, help="Number of enviro
 parser.add_argument("--task", type=str, default=None, help="Name of the task.")
 parser.add_argument("--seed", type=int, default=None, help="Seed used for the environment")
 parser.add_argument("--max_iterations", type=int, default=None, help="RL Policy training iterations.")
-parser.add_argument("--registry_name", type=str, required=True, help="The name of the wand registry.")
+parser.add_argument("--registry_name", type=str, default=None, help="The name of the wand registry.")
 
 # append RSL-RL cli arguments
 cli_args.add_rsl_rl_args(parser)
@@ -47,6 +47,7 @@ simulation_app = app_launcher.app
 
 import gymnasium as gym
 import os
+import pathlib
 import torch
 from datetime import datetime
 
@@ -77,6 +78,46 @@ torch.backends.cudnn.deterministic = False
 torch.backends.cudnn.benchmark = False
 
 
+def _normalize_optional_str(value: str | None) -> str | None:
+    if value is None:
+        return None
+    value = value.strip()
+    return value if value else None
+
+
+def _download_checkpoint_from_wandb(wandb_path: str) -> tuple[str, object]:
+    import wandb
+
+    run_path = wandb_path
+
+    api = wandb.Api()
+    if "model" in wandb_path:
+        run_path = "/".join(wandb_path.split("/")[:-1])
+    wandb_run = api.run(run_path)
+
+    files = [file.name for file in wandb_run.files() if "model" in file.name]
+    if not files:
+        raise RuntimeError(f"No model checkpoint files found in wandb run '{run_path}'.")
+
+    if "model" in wandb_path:
+        checkpoint_file = wandb_path.split("/")[-1]
+    else:
+        checkpoint_file = max(files, key=lambda x: int(x.split("_")[1].split(".")[0]))
+
+    wandb_file = wandb_run.file(str(checkpoint_file))
+    wandb_file.download("./logs/rsl_rl/temp", replace=True)
+
+    print(f"[INFO]: Loading model checkpoint from: {run_path}/{checkpoint_file}")
+    return f"./logs/rsl_rl/temp/{checkpoint_file}", wandb_run
+
+
+def _load_motion_file_from_wandb_run(env_cfg, wandb_run) -> None:
+    art = next((a for a in wandb_run.used_artifacts() if a.type == "motions"), None)
+    if art is None:
+        raise RuntimeError("No motion artifact found in the wandb run.")
+    env_cfg.commands.motion.motion_file = str(pathlib.Path(art.download()) / "motion.npz")
+
+
 @hydra_task_config(args_cli.task, "rsl_rl_cfg_entry_point")
 def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agent_cfg: RslRlOnPolicyRunnerCfg):
     """Train with RSL-RL agent."""
@@ -92,19 +133,29 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     env_cfg.seed = agent_cfg.seed
     env_cfg.sim.device = args_cli.device if args_cli.device is not None else env_cfg.sim.device
 
+    registry_name = _normalize_optional_str(args_cli.registry_name)
+    wandb_path = _normalize_optional_str(args_cli.wandb_path)
+    wandb_run = None
+    resume_path = None
+
+    if wandb_path is not None:
+        resume_path, wandb_run = _download_checkpoint_from_wandb(wandb_path)
+
     # load the motion file from the wandb registry
     requires_motion = env_cfg_requires_motion(env_cfg)
     if requires_motion:
-        registry_name = args_cli.registry_name
-        if ":" not in registry_name:  # Check if the registry name includes alias, if not, append ":latest"
-            registry_name += ":latest"
-        import pathlib
+        if registry_name is not None:
+            if ":" not in registry_name:  # Check if the registry name includes alias, if not, append ":latest"
+                registry_name += ":latest"
+            import wandb
 
-        import wandb
-
-        api = wandb.Api()
-        artifact = api.artifact(registry_name)
-        env_cfg.commands.motion.motion_file = str(pathlib.Path(artifact.download()) / "motion.npz")
+            api = wandb.Api()
+            artifact = api.artifact(registry_name)
+            env_cfg.commands.motion.motion_file = str(pathlib.Path(artifact.download()) / "motion.npz")
+        elif wandb_run is not None:
+            _load_motion_file_from_wandb_run(env_cfg, wandb_run)
+        else:
+            raise ValueError("Tracking tasks require either --registry_name or --wandb_path.")
 
     # specify directory for logging experiments
     log_root_path = os.path.join("logs", "rsl_rl", agent_cfg.experiment_name)
@@ -148,11 +199,10 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     # write git state to logs
     runner.add_git_repo_to_log(__file__)
     # save resume path before creating a new log_dir
-    if agent_cfg.resume:
-        # get path to previous checkpoint
+    if resume_path is None and agent_cfg.resume:
         resume_path = get_checkpoint_path(log_root_path, agent_cfg.load_run, agent_cfg.load_checkpoint)
         print(f"[INFO]: Loading model checkpoint from: {resume_path}")
-        # load previously trained model
+    if resume_path is not None:
         runner.load(resume_path)
 
     # dump the configuration into log-directory

@@ -67,7 +67,7 @@ class Go2TrampolineEventCfg(BaseEventCfg):
 
 @configclass
 class Go2TrampolineEnvCfg(Go2FlatEnvCfg):
-    scene: Go2TrampolineSceneCfg = Go2TrampolineSceneCfg(num_envs=256, env_spacing=4.0, replicate_physics=False)
+    scene: Go2TrampolineSceneCfg = Go2TrampolineSceneCfg(num_envs=2048, env_spacing=4.0, replicate_physics=False)
     actions: Go2TrampolineActionsCfg = Go2TrampolineActionsCfg()
     events: Go2TrampolineEventCfg = Go2TrampolineEventCfg()
 
