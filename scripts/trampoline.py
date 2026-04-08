@@ -29,8 +29,6 @@ parser.add_argument(
     default="builtin",
     help="Trampoline implementation to use.",
 )
-parser.add_argument("--num_envs", type=int, default=1, help="Number of scene instances to spawn.")
-parser.add_argument("--env_spacing", type=float, default=4.0, help="Environment spacing. Defaults to 4.0 when omitted.")
 parser.add_argument(
     "--passive",
     action="store_true",
@@ -183,10 +181,10 @@ def make_spring_visual_cfg(prim_path: str, surface_height: float) -> AssetBaseCf
     )
 
 
-def build_scene_cfg(surface_height: float, ball_height: float, env_spacing: float) -> UnifiedTrampolineSceneCfg:
+def build_scene_cfg(surface_height: float, ball_height: float) -> UnifiedTrampolineSceneCfg:
     scene_cfg = UnifiedTrampolineSceneCfg(
-        num_envs=args_cli.num_envs,
-        env_spacing=env_spacing,
+        num_envs=1,
+        env_spacing=4.0,
         replicate_physics=args_cli.trampoline_mode != "builtin",
     )
     if args_cli.actor == "g1":
@@ -411,7 +409,7 @@ def apply_ball_spring_contact(
 def print_mode_summary(surface_height: float, ball_height: float | None) -> None:
     summary = (
         f"[INFO]: Loaded trampoline scene — actor={args_cli.actor}, mode={args_cli.trampoline_mode}, "
-        f"num_envs={args_cli.num_envs}, passive={args_cli.passive}, surface_height={surface_height:.3f}"
+        f"passive={args_cli.passive}, surface_height={surface_height:.3f}"
     )
     if args_cli.actor == "ball" and ball_height is not None:
         summary += f", ball_height={ball_height:.3f}"
@@ -419,7 +417,6 @@ def print_mode_summary(surface_height: float, ball_height: float | None) -> None
 
 
 def main() -> None:
-    env_spacing = args_cli.env_spacing
     reset_interval = 500
 
     sim_dt = 0.005
@@ -427,7 +424,7 @@ def main() -> None:
     set_camera(sim)
 
     ball_height = args_cli.ball_height
-    scene_cfg = build_scene_cfg(0.0, ball_height, env_spacing)
+    scene_cfg = build_scene_cfg(0.0, ball_height)
     scene = InteractiveScene(scene_cfg)
 
     sim.reset()
