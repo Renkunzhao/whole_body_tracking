@@ -1,0 +1,169 @@
+\documentclass[11pt, a4paper]{article}
+\usepackage{amsmath, amssymb, bm}
+\usepackage{geometry}
+\geometry{margin=2.5cm}
+
+\title{Hopping-Flat-Go2-v0 Reward Summary}
+\date{}
+
+\begin{document}
+\maketitle
+
+Let $\Delta t$ denote the step duration (decimation $\times$ simulation dt).
+All reward terms are multiplied by their respective weight $w_i$ and $\Delta t$.
+Let $\bm{v}^b$ and $\bm{\omega}^b$ denote base linear and angular velocity in body frame,
+$\bm{c}$ the velocity command $(v_x^{\text{cmd}}, v_y^{\text{cmd}}, \omega_z^{\text{cmd}})$,
+$\bm{q}$ the joint positions, $\dot{\bm{q}}$ the joint velocities,
+$\bm{\tau}$ the applied torques, $\bm{a}_t$ the current actions,
+$\bm{g}^b$ the projected gravity in body frame.
+Define the moving indicator $\mathbb{M} = \mathbb{1}[\|\bm{c}_{xy}\| > 0.1]$.
+
+%------------------------------------------------------------------
+\section{Tracking Rewards}
+%------------------------------------------------------------------
+
+\paragraph{Tracking linear velocity} ($w = 2.0, \sigma = 0.25$)
+\[
+  r = \begin{cases}
+    \exp\!\Bigl(-\dfrac{\|{\bm{c}_{xy} - \bm{v}^b_{xy}}\|^2}{\sigma}\Bigr) & \text{if } \mathbb{M} \\[6pt]
+    \exp\!\Bigl(-\dfrac{\|\bm{v}^b_{xy}\|}{\sigma}\Bigr) & \text{otherwise}
+  \end{cases}
+\]
+
+\paragraph{Tracking angular velocity} ($w = 2.0, \sigma = 0.25$)
+\[
+  r = \begin{cases}
+    \exp\!\Bigl(-\dfrac{(\omega_z^{\text{cmd}} - \omega^b_z)^2}{\sigma}\Bigr) & \text{if } |\omega_z^{\text{cmd}}| > 0.2 \\[6pt]
+    \exp\!\Bigl(-\dfrac{|\omega^b_z|}{\sigma}\Bigr) & \text{otherwise}
+  \end{cases}
+\]
+
+%------------------------------------------------------------------
+\section{Gait and Motion Rewards}
+%------------------------------------------------------------------
+
+\paragraph{Gait phase} ($w = 2.0$)
+
+Gait phase $\phi = \bigl(\frac{t}{T_c}\bigr) \bmod 1$, where $T_c = 1.5\,\text{s}$.
+Define the desired stance signal $s = \mathbb{1}[\phi < 0.6]$
+and the actual contact signal per foot $c_i = \mathbb{1}[f_{i,z} > 5\,\text{N}]$.
+\[
+  r = \mathbb{M} \cdot \prod_{i=1}^{4} \mathbb{1}[c_i = s]
+\]
+When $s=1$ ($\phi < 0.6$), all four feet must be in contact;
+when $s=0$ ($\phi \geq 0.6$), all four feet must be airborne.
+Any foot out of sync yields $r = 0$.
+
+\paragraph{Feet air time} ($w = 1.0$)
+
+Each foot $i$ accumulates air time $t_{\text{air},i}$ while airborne (incremented by $\Delta t$ each step).
+At the moment foot $i$ lands (transition from airborne to contact), the accumulated
+$t_{\text{air},i}$ is scored and then reset to zero. Only landing frames contribute to the reward:
+\[
+  r = \mathbb{M} \cdot \sum_{i=1}^{4} (t_{\text{air},i} - 0.5)\cdot \mathbb{1}[\text{foot } i \text{ lands this step}]
+\]
+If a foot was airborne longer than $0.5\,\text{s}$ before landing, the term is positive;
+shorter than $0.5\,\text{s}$ yields a penalty.
+
+\paragraph{Feet clearance} ($w = 0.5$)
+
+During swing phase (when stance mask $= 0$), reward foot height above terrain:
+\[
+  r = \mathbb{M} \cdot \sum_{i=1}^{4} \text{swing}_i \cdot \text{clamp}(h_{\text{foot},i} - h_{\text{terrain}} - 0.02,\; 0,\; 0.05)
+\]
+
+%------------------------------------------------------------------
+\section{Stability Rewards}
+%------------------------------------------------------------------
+
+\paragraph{Linear velocity $z$} ($w = 0.05$)
+\[
+  r = \exp(-|v^b_z|)
+\]
+
+\paragraph{Angular velocity $xy$} ($w = 0.2$)
+\[
+  r = \exp(-\|\bm{\omega}^b_{xy}\|)
+\]
+
+\paragraph{Orientation} ($w = 0.6$)
+\[
+  r = \exp(-10\,\|\bm{g}^b_{xy}\|)
+\]
+
+\paragraph{Base height} ($w = 1.0$)
+
+Target height $h^* = 0.3\,\text{m}$. Only active when \emph{not} moving:
+\[
+  r = \exp\!\bigl(-10\,|h_{\text{base}} - h^*|\bigr) \cdot (1 - \mathbb{M})
+\]
+
+%------------------------------------------------------------------
+\section{Regularization (Penalties)}
+%------------------------------------------------------------------
+
+\paragraph{Torques} ($w = -0.0002$)
+\[
+  r = \sum_{j} |\tau_j|
+\]
+
+\paragraph{DOF velocity} ($w = 0.0$, inactive)
+\[
+  r = \sum_{j} \dot{q}_j^2
+\]
+
+\paragraph{DOF acceleration} ($w = -5.5 \times 10^{-4}$)
+\[
+  r = \sum_{j} (\dot{q}_{j,t-1} - \dot{q}_{j,t})^2
+\]
+
+\paragraph{Action rate} ($w = -0.01$)
+\[
+  r = \sum_{j} (a_{j,t-1} - a_{j,t})^2
+\]
+
+\paragraph{Default joint position} ($w = -0.1$)
+\[
+  r = \sum_{j} |q_j - q_j^{\text{default}}|
+\]
+
+\paragraph{Default hip position} ($w = 0.3$)
+
+Encourages hip joints (indices 0, 3, 6, 9) to stay near zero:
+\[
+  r = \exp\!\Bigl(-4 \sum_{k \in \{0,3,6,9\}} |q_k|\Bigr)
+\]
+
+%------------------------------------------------------------------
+\section{Contact Penalties}
+%------------------------------------------------------------------
+
+\paragraph{Collision} ($w = -1.0$)
+
+Penalizes contact on thigh and calf bodies:
+\[
+  r = \sum_{i \in \text{penalized}} \mathbb{1}\!\bigl[\|\bm{f}_i\| > 0.1\bigr]
+\]
+
+\paragraph{Feet stumble} ($w = 0.0$, inactive)
+\[
+  r = \mathbb{1}\!\Bigl[\exists\, i:\; \|\bm{f}_{i,xy}\| > 5\,|f_{i,z}|\Bigr]
+\]
+
+\paragraph{Feet contact forces} ($w = -0.01$)
+
+Penalizes foot contact forces exceeding $f_{\max} = 100\,\text{N}$:
+\[
+  r = \sum_{i=1}^{4} \max\!\bigl(\|\bm{f}_i\| - f_{\max},\; 0\bigr)
+\]
+
+%------------------------------------------------------------------
+\section{Termination}
+%------------------------------------------------------------------
+
+\paragraph{Termination penalty} ($w = 0.0$, inactive)
+\[
+  r = \mathbb{1}[\text{reset} \;\wedge\; \neg\,\text{timeout}]
+\]
+
+\end{document}
