@@ -103,19 +103,26 @@ def attach_onnx_metadata(env: ManagerBasedRLEnv | DirectRLEnv, run_path: str, pa
             history_length = term_cfg["history_length"]
             observation_history_lengths.append(1 if history_length == 0 else history_length)
 
+    robot_data = env.scene["robot"].data
+    default_joint_pos = getattr(robot_data, "default_joint_pos_nominal", None)
+    if default_joint_pos is None:
+        default_joint_pos = robot_data.default_joint_pos[0]
+
     metadata = {
         "run_path": run_path,
-        "joint_names": env.scene["robot"].data.joint_names,
-        "joint_stiffness": env.scene["robot"].data.joint_stiffness[0].cpu().tolist(),
-        "joint_damping": env.scene["robot"].data.joint_damping[0].cpu().tolist(),
-        "default_joint_pos": env.scene["robot"].data.default_joint_pos_nominal.cpu().tolist(),
+        "joint_names": robot_data.joint_names,
+        "joint_stiffness": robot_data.joint_stiffness[0].cpu().tolist(),
+        "joint_damping": robot_data.joint_damping[0].cpu().tolist(),
+        "default_joint_pos": default_joint_pos.cpu().tolist(),
         "command_names": env.command_manager.active_terms,
         "observation_names": observation_names,
         "observation_history_lengths": observation_history_lengths,
         "action_scale": env.action_manager.get_term("joint_pos")._scale[0].cpu().tolist(),
-        "anchor_body_name": env.command_manager.get_term("motion").cfg.anchor_body_name,
-        "body_names": env.command_manager.get_term("motion").cfg.body_names,
     }
+    if "motion" in env.command_manager.active_terms:
+        motion_cfg = env.command_manager.get_term("motion").cfg
+        metadata["anchor_body_name"] = motion_cfg.anchor_body_name
+        metadata["body_names"] = motion_cfg.body_names
 
     model = onnx.load(onnx_path)
 
