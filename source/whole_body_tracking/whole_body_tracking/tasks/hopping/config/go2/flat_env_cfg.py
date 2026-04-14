@@ -137,6 +137,10 @@ class DomainRandCfg:
     randomize_cmd_action_latency = True
     range_cmd_action_latency = (1, 3)
 
+    randomize_trampoline_properties = True
+    trampoline_youngs_modulus_range: tuple[float, float] = (8e4, 8.0e4)
+    trampoline_mass_range: tuple[float, float] = (10.0, 10.0)
+
 
 @configclass
 class RewardScalesCfg:
@@ -300,7 +304,7 @@ class Go2HoppingFlatEnvCfg(DirectRLEnvCfg):
 class Go2HoppingTrampolineEnvCfg(Go2HoppingFlatEnvCfg):
     terrain: TerrainImporterCfg | None = None
     scene: InteractiveSceneCfg = InteractiveSceneCfg(
-        num_envs=4096,
+        num_envs=2048,
         env_spacing=max(3.0, 2.0 * float(TRAMPOLINE_RADIUS) + 2.0),
         replicate_physics=False,
     )

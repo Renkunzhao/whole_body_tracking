@@ -21,6 +21,9 @@ from whole_body_tracking.tasks.hopping.symmetry import GO2_JUMP_ACTION_PERMUTATI
 from whole_body_tracking.tasks.tracking.mdp.events import randomize_rigid_body_com
 from whole_body_tracking.utils.trampoline_deformable import (
     build_trampoline_kinematic_targets,
+    get_trampoline_youngs_moduli,
+    set_trampoline_youngs_moduli,
+    trampoline_mesh_prim_path,
 )
 
 
@@ -179,6 +182,10 @@ class Go2HoppingEnv(DirectRLEnv):
         self._command_resample_interval = int(self.cfg.commands.resampling_time / self.step_dt)
         self._push_interval = math.ceil(self.cfg.domain_rand.push_interval_s / self.step_dt)
 
+        self._trampoline_material_view = None
+        self._trampoline_mass_attrs: list = []
+        self._trampoline_default_masses: torch.Tensor | None = None
+
         if self._has_trampoline:
             self._trampoline_targets, self._trampoline_pinned_mask, self._trampoline_center_node_ids = build_trampoline_kinematic_targets(
                 self._trampoline.data.default_nodal_state_w,
@@ -186,6 +193,7 @@ class Go2HoppingEnv(DirectRLEnv):
                 pin_width=self.cfg.trampoline_pin_width,
             )
             reset_deformable_trampoline(self._trampoline, self._trampoline_targets)
+            self._setup_trampoline_dr()
 
         self._apply_startup_randomization(self._all_env_ids)
         self.scene.write_data_to_sim()
@@ -422,6 +430,7 @@ class Go2HoppingEnv(DirectRLEnv):
         self._contact_sensor.reset(env_ids)
         if self._has_trampoline and self._trampoline_targets is not None:
             reset_deformable_trampoline(self._trampoline, self._trampoline_targets, env_ids=env_ids)
+            self._randomize_trampoline(env_ids)
 
         if (
             self._manual_command is None
@@ -629,6 +638,57 @@ class Go2HoppingEnv(DirectRLEnv):
                 self.cfg.domain_rand.motor_zero_offset_range[1],
                 (len(env_ids), self._action_dim),
             )
+
+    def _setup_trampoline_dr(self):
+        """Initialise trampoline material view and per-env mass attributes for DR."""
+        from isaacsim.core.utils.stage import get_current_stage
+        from pxr import Sdf
+
+        self._trampoline_material_view = self._trampoline.material_physx_view
+        if self._trampoline_material_view is None:
+            raise RuntimeError("Trampoline DR requires a deformable material view.")
+
+        mesh_paths = sim_utils.find_matching_prim_paths(
+            trampoline_mesh_prim_path(self.cfg.trampoline.prim_path)
+        )
+        stage = get_current_stage()
+        self._trampoline_default_masses = torch.zeros(self.num_envs, device=self.device, dtype=torch.float32)
+        self._trampoline_mass_attrs = []
+        for env_id, prim_path in enumerate(mesh_paths):
+            prim = stage.GetPrimAtPath(prim_path)
+            attr = prim.GetAttribute("physics:mass")
+            if not attr.IsValid():
+                attr = prim.CreateAttribute("physics:mass", Sdf.ValueTypeNames.Float)
+            self._trampoline_mass_attrs.append(attr)
+            value = attr.Get()
+            if value is not None:
+                self._trampoline_default_masses[env_id] = float(value)
+
+    def _randomize_trampoline(self, env_ids: Sequence[int] | torch.Tensor):
+        """Randomize trampoline youngs modulus and mass, then rewrite pinning targets."""
+        from pxr import Sdf
+
+        if not self._has_trampoline or self._trampoline_material_view is None:
+            return
+        if not self.cfg.domain_rand.randomize_trampoline_properties:
+            return
+        if not isinstance(env_ids, torch.Tensor):
+            env_ids = torch.tensor(list(env_ids), dtype=torch.long, device=self.device)
+
+        youngs_range = self.cfg.domain_rand.trampoline_youngs_modulus_range
+        youngs_moduli = self._sample_uniform(youngs_range[0], youngs_range[1], (len(env_ids),))
+        set_trampoline_youngs_moduli(self._trampoline_material_view, youngs_moduli.to(torch.float32), env_ids)
+
+        mass_range = self.cfg.domain_rand.trampoline_mass_range
+        if mass_range[0] != mass_range[1]:
+            masses = self._sample_uniform(mass_range[0], mass_range[1], (len(env_ids),))
+            with Sdf.ChangeBlock():
+                for env_id, mass in zip(env_ids.tolist(), masses.tolist(), strict=True):
+                    self._trampoline_mass_attrs[env_id].Set(float(mass))
+
+        # Rewrite pinning targets after material changes
+        if self._trampoline_targets is not None:
+            self._trampoline.write_nodal_kinematic_target_to_sim(self._trampoline_targets[env_ids], env_ids=env_ids)
 
     def _reset_latency_buffers(self, env_ids: torch.Tensor):
         if self.cfg.domain_rand.add_cmd_action_latency:
@@ -885,3 +945,83 @@ class Go2HoppingEnv(DirectRLEnv):
 
     def _to_tensor(self, ids: Sequence[int]) -> torch.Tensor:
         return torch.tensor(list(ids), dtype=torch.long, device=self.device)
+
+
+# ---------------------------------------------------------------------------
+# Trampoline helpers (module-level)
+# ---------------------------------------------------------------------------
+
+
+def reset_deformable_trampoline(
+    trampoline: DeformableObject,
+    trampoline_targets: torch.Tensor,
+    env_ids: Sequence[int] | torch.Tensor | None = None,
+) -> None:
+    """Reset a deformable trampoline's nodal state and kinematic targets."""
+    if env_ids is None:
+        env_ids = torch.arange(trampoline.num_instances, device=trampoline.device, dtype=torch.long)
+    elif not isinstance(env_ids, torch.Tensor):
+        env_ids = torch.tensor(list(env_ids), dtype=torch.long, device=trampoline.device)
+    trampoline.write_nodal_state_to_sim(trampoline.data.default_nodal_state_w[env_ids], env_ids=env_ids)
+    trampoline.write_nodal_kinematic_target_to_sim(trampoline_targets[env_ids], env_ids=env_ids)
+    trampoline.reset(env_ids=env_ids)
+
+
+def trampoline_center_heights(
+    trampoline: DeformableObject,
+    center_node_ids: torch.Tensor,
+) -> torch.Tensor:
+    """Return the z-position of the centre node for each environment."""
+    nodal_pos = trampoline.data.nodal_pos_w  # (num_envs, num_nodes, 3)
+    env_ids = torch.arange(nodal_pos.shape[0], device=nodal_pos.device)
+    return nodal_pos[env_ids, center_node_ids, 2:3]
+
+
+def build_trampoline_visual_translate_ops(num_envs: int):
+    """Placeholder for building per-env USD translate ops for trampoline visuals.
+
+    Returns None when the visual cylinder is not used, which causes
+    ``update_trampoline_visual_height`` to be a no-op.
+    """
+    try:
+        from isaacsim.core.utils.stage import get_current_stage
+        from pxr import UsdGeom
+
+        stage = get_current_stage()
+        ops = []
+        for i in range(num_envs):
+            prim_path = f"/World/envs/env_{i}/TrampolineVisual"
+            prim = stage.GetPrimAtPath(prim_path)
+            if not prim.IsValid():
+                return None
+            xform = UsdGeom.Xformable(prim)
+            translate_op = None
+            for op in xform.GetOrderedXformOps():
+                if op.GetOpType() == UsdGeom.XformOp.TypeTranslate:
+                    translate_op = op
+                    break
+            if translate_op is None:
+                translate_op = xform.AddTranslateOp()
+            ops.append(translate_op)
+        return ops
+    except Exception:
+        return None
+
+
+def update_trampoline_visual_height(
+    env_origins: torch.Tensor,
+    translate_ops,
+    measured_heights: torch.Tensor,
+) -> None:
+    """Move the visual cylinder to match the deformable surface height."""
+    if translate_ops is None:
+        return
+    from pxr import Gf
+
+    for i, op in enumerate(translate_ops):
+        z = float(measured_heights[i, 0]) - float(env_origins[i, 2])
+        current = op.Get()
+        if current is not None:
+            op.Set(Gf.Vec3d(float(current[0]), float(current[1]), z))
+        else:
+            op.Set(Gf.Vec3d(0.0, 0.0, z))
