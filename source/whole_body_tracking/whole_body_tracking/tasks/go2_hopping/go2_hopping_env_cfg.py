@@ -23,7 +23,6 @@ import whole_body_tracking.tasks.go2_hopping.mdp as mdp
 from whole_body_tracking.robots.go2 import (
     GO2_ACTION_SCALE,
     GO2_FOOT_BODY_NAMES,
-    GO2_TRACKING_ANCHOR_BODY_NAME,
     get_go2_cfg,
     get_go2_spawn_cfg,
 )
@@ -40,6 +39,8 @@ VELOCITY_RANGE = {
     "yaw": (-0.78, 0.78),
 }
 
+HOPPING_CYCLE_TIME = 1.0
+HOPPING_STANCE_FRACTION = 0.45
 
 GO2_HOPPING_CFG = get_go2_cfg(
     spawn=get_go2_spawn_cfg(
@@ -116,6 +117,7 @@ class ObservationsCfg:
         """Observations for policy group."""
 
         # observation terms (order preserved)
+        phase = ObsTerm(func=mdp.sin_cos_phase, params={"cycle_time": HOPPING_CYCLE_TIME})
         base_ang_vel = ObsTerm(func=mdp.base_ang_vel, noise=Unoise(n_min=-0.2, n_max=0.2))
         joint_pos = ObsTerm(func=mdp.joint_pos_rel, noise=Unoise(n_min=-0.01, n_max=0.01))
         joint_vel = ObsTerm(func=mdp.joint_vel_rel, noise=Unoise(n_min=-0.5, n_max=0.5))
@@ -127,6 +129,7 @@ class ObservationsCfg:
 
     @configclass
     class PrivilegedCfg(ObsGroup):
+        phase = ObsTerm(func=mdp.sin_cos_phase, params={"cycle_time": HOPPING_CYCLE_TIME})
         base_lin_vel = ObsTerm(func=mdp.base_lin_vel)
         base_ang_vel = ObsTerm(func=mdp.base_ang_vel)
         joint_pos = ObsTerm(func=mdp.joint_pos_rel)
@@ -164,12 +167,25 @@ class EventCfg:
         params={"velocity_range": VELOCITY_RANGE},
     )
 
+    # reset
+    reset_all = EventTerm(func=mdp.reset_scene_to_default, mode="reset")
+
 
 @configclass
 class RewardsCfg:
     """Reward terms for the MDP."""
 
-    action_rate_l2 = RewTerm(func=mdp.action_rate_l2, weight=-1e-1)
+    phase_contact = RewTerm(
+        func=mdp.phase_contact,
+        weight=2.0,
+        params={
+            "sensor_cfg": SceneEntityCfg("contact_forces", body_names=list(GO2_FOOT_BODY_NAMES)),
+            "cycle_time": HOPPING_CYCLE_TIME,
+            "stance_fraction": HOPPING_STANCE_FRACTION,
+            "contact_threshold": 5.0,
+        },
+    )
+    action_rate_l2 = RewTerm(func=mdp.action_rate_l2, weight=-1e-2)
     joint_limit = RewTerm(
         func=mdp.joint_pos_limits,
         weight=-10.0,
@@ -181,6 +197,14 @@ class RewardsCfg:
 class TerminationsCfg:
     """Termination terms for the MDP."""
 
+    base_orientation = DoneTerm(func=mdp.bad_orientation, params={"limit_angle": 1.0})
+    non_foot_contact = DoneTerm(
+        func=mdp.illegal_contact,
+        params={
+            "sensor_cfg": SceneEntityCfg("contact_forces", body_names="^(?!.*_foot$).*"),
+            "threshold": 1.0,
+        },
+    )
     time_out = DoneTerm(func=mdp.time_out, time_out=True)
 
 

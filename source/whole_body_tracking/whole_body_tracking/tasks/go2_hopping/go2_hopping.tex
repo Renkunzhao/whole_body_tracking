@@ -1,0 +1,63 @@
+\documentclass[11pt, a4paper]{article}
+\usepackage{amsmath, amssymb, bm}
+\usepackage{geometry}
+\geometry{margin=2.5cm}
+
+\title{Go2-Hopping Summary}
+\date{}
+
+\begin{document}
+\maketitle
+
+\section{Minimal In-Place Hopping Reward}
+
+The current manager-based Go2 hopping task uses a minimal phase-conditioned
+reward. Let the episode phase be
+\begin{equation}
+    \phi_t = \operatorname{mod}\left(\frac{k_t \Delta t}{T}, 1\right),
+\end{equation}
+where $k_t$ is the per-environment episode step, $\Delta t$ is the environment
+step time, and the default cycle time is
+\begin{equation}
+    T = 1.0\ \mathrm{s}.
+\end{equation}
+The policy and critic observe the phase through
+\begin{equation}
+    \bm{o}^{\mathrm{phase}}_t =
+    \begin{bmatrix}
+        \sin(2\pi \phi_t) & \cos(2\pi \phi_t)
+    \end{bmatrix}.
+\end{equation}
+
+\subsection{Phase Contact Reward}
+
+The actual contact state is
+\begin{equation}
+    c_{i,t} =
+    \mathbb{I}\left[
+        \max_{\tau \in \mathcal{H}}
+        \left\lVert \bm{f}_{i,t-\tau} \right\rVert_2
+        > f_{\mathrm{th}}
+    \right],
+    \qquad
+    f_{\mathrm{th}} = 5.0\ \mathrm{N}.
+\end{equation}
+where $c_{i,t}$ denote whether foot $i$ is in contact, $\bm{f}_{i,t}$ be the net contact force on foot $i$ at time $t$, $\mathcal{H}$ is the history window.
+
+The desired contact state is all-feet stance for the first part of the cycle
+and all-feet flight afterward:
+\begin{equation}
+    d_t = \mathbb{I}\left[\phi_t < \rho_{\mathrm{stance}}\right],
+    \qquad
+    \rho_{\mathrm{stance}} = 0.45.
+\end{equation}
+The contact reward requires all feet to match the desired phase together:
+\begin{equation}
+    r^{\mathrm{contact}}_t =
+    d_t \prod_{i \in \mathcal{F}} c_{i,t}
+    + (1 - d_t) \prod_{i \in \mathcal{F}} (1 - c_{i,t}).
+\end{equation}
+where $\mathcal{F}$ is the set of feet. Thus the reward is one only when all
+feet are in contact during stance, or all feet are in the air during flight.
+
+\end{document}
