@@ -104,14 +104,14 @@ class CommandsCfg:
     twist = UniformVelocityCommandCfg(
         asset_name="robot",
         resampling_time_range=(3.0, 8.0),
-        rel_standing_envs=0.1,
+        rel_standing_envs=0.5,
         rel_heading_envs=0.3,
         heading_command=True,
         heading_control_stiffness=0.5,
         debug_vis=False,
         ranges=UniformVelocityCommandCfg.Ranges(
-            lin_vel_x=(-1.0, 1.0),
-            lin_vel_y=(-1.0, 1.0),
+            lin_vel_x=(-0.5, 0.5),
+            lin_vel_y=(-0.5, 0.5),
             ang_vel_z=(-0.5, 0.5),
             heading=(-math.pi, math.pi),
         ),
@@ -225,6 +225,14 @@ class RewardsCfg:
             "asset_cfg": SceneEntityCfg("robot", joint_names=[".*"]),
         },
     )
+    track_linear_velocity = RewTerm(
+        func=mdp.track_lin_vel_xy_exp,
+        weight=0.0,
+        params={
+            "command_name": "twist",  # 换成你的 command term 名
+            "std": math.sqrt(0.25),           # 典型值
+        },
+    )
     track_angular_velocity = RewTerm(
         func=mdp.track_ang_vel_z_exp,
         weight=0.0,
@@ -270,6 +278,10 @@ class CurriculumCfg:
         func=modify_reward_weight,
         # params={"term_name": "joint_deviation_l1", "weight": -0.1, "num_steps": 300*24 },
         params={"term_name": "joint_deviation_phase_exp", "weight": 0.5, "num_steps": 300*24 },
+    )
+    enable_track_linear_velocity = CurrTerm(
+        func=modify_reward_weight,
+        params={"term_name": "track_linear_velocity", "weight": 1.0, "num_steps": 300*24},
     )
     enable_track_angular_velocity = CurrTerm(
         func=modify_reward_weight,
@@ -324,4 +336,5 @@ class Go2HoppingEnvCfg(ManagerBasedRLEnvCfg):
         self.commands.twist.ranges.ang_vel_z = (0.3, 0.3)
         self.commands.twist.heading_command = False
         self.commands.twist.rel_standing_envs = 0.0
+        self.events.push_robot = None
         return self
