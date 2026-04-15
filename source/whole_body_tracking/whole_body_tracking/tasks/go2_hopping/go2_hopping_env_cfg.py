@@ -1,8 +1,13 @@
 from __future__ import annotations
 
+import math
+
 import isaaclab.sim as sim_utils
 from isaaclab.assets import ArticulationCfg, AssetBaseCfg
 from isaaclab.envs import ManagerBasedRLEnvCfg
+from isaaclab.envs.mdp.commands import UniformVelocityCommandCfg
+from isaaclab.envs.mdp.curriculums import modify_reward_weight
+from isaaclab.managers import CurriculumTermCfg as CurrTerm
 from isaaclab.managers import EventTermCfg as EventTerm
 from isaaclab.managers import ObservationGroupCfg as ObsGroup
 from isaaclab.managers import ObservationTermCfg as ObsTerm
@@ -96,7 +101,21 @@ class MySceneCfg(InteractiveSceneCfg):
 class CommandsCfg:
     """Command specifications for the MDP."""
 
-    pass
+    twist = UniformVelocityCommandCfg(
+        asset_name="robot",
+        resampling_time_range=(3.0, 8.0),
+        rel_standing_envs=0.1,
+        rel_heading_envs=0.3,
+        heading_command=True,
+        heading_control_stiffness=0.5,
+        debug_vis=False,
+        ranges=UniformVelocityCommandCfg.Ranges(
+            lin_vel_x=(-1.0, 1.0),
+            lin_vel_y=(-1.0, 1.0),
+            ang_vel_z=(-0.5, 0.5),
+            heading=(-math.pi, math.pi),
+        ),
+    )
 
 
 @configclass
@@ -119,6 +138,7 @@ class ObservationsCfg:
         # observation terms (order preserved)
         phase = ObsTerm(func=mdp.sin_cos_phase, params={"cycle_time": HOPPING_CYCLE_TIME})
         base_ang_vel = ObsTerm(func=mdp.base_ang_vel, noise=Unoise(n_min=-0.2, n_max=0.2))
+        projected_gravity = ObsTerm(func=mdp.projected_gravity, noise=Unoise(n_min=-0.05, n_max=0.05))
         joint_pos = ObsTerm(func=mdp.joint_pos_rel, noise=Unoise(n_min=-0.01, n_max=0.01))
         joint_vel = ObsTerm(func=mdp.joint_vel_rel, noise=Unoise(n_min=-0.5, n_max=0.5))
         actions = ObsTerm(func=mdp.last_action)
@@ -128,13 +148,12 @@ class ObservationsCfg:
             self.concatenate_terms = True
 
     @configclass
-    class PrivilegedCfg(ObsGroup):
-        phase = ObsTerm(func=mdp.sin_cos_phase, params={"cycle_time": HOPPING_CYCLE_TIME})
+    class PrivilegedCfg(PolicyCfg):
         base_lin_vel = ObsTerm(func=mdp.base_lin_vel)
-        base_ang_vel = ObsTerm(func=mdp.base_ang_vel)
-        joint_pos = ObsTerm(func=mdp.joint_pos_rel)
-        joint_vel = ObsTerm(func=mdp.joint_vel_rel)
-        actions = ObsTerm(func=mdp.last_action)
+
+        def __post_init__(self):
+            super().__post_init__()
+            self.enable_corruption = False
 
     # observation groups
     policy: PolicyCfg = PolicyCfg()
@@ -185,8 +204,37 @@ class RewardsCfg:
             "contact_threshold": 5.0,
         },
     )
+    # note: this term sum all joints' deviations, so the weight should be divided by the number of joints to keep the reward magnitude consistent when changing the robot
+    # joint_deviation_l1 = RewTerm(func=mdp.joint_deviation_l1, weight=0.0)
+    joint_deviation_phase_exp = RewTerm(
+        func=mdp.joint_deviation_phase_exp,
+        weight=0.0,
+        params={
+            "cycle_time": HOPPING_CYCLE_TIME,
+            "stance_fraction": HOPPING_STANCE_FRACTION,
+            "std_stance": {
+                ".*_hip_joint": 0.3,   # 严格：站立时 hip 不能晃
+                ".*_thigh_joint": 0.3,
+                ".*_calf_joint": 0.6,
+            },
+            "std_flight": {
+                ".*_hip_joint": 0.3,   # 飞行时放松一点
+                ".*_thigh_joint": 0.3,  # 膝大幅摆动
+                ".*_calf_joint": 0.6,
+            },
+            "asset_cfg": SceneEntityCfg("robot", joint_names=[".*"]),
+        },
+    )
+    track_angular_velocity = RewTerm(
+        func=mdp.track_ang_vel_z_exp,
+        weight=0.0,
+        params={
+            "command_name": "twist",  # 换成你的 command term 名
+            "std": math.sqrt(0.5),           # 典型值
+        },
+    )
     action_rate_l2 = RewTerm(func=mdp.action_rate_l2, weight=-1e-2)
-    joint_limit = RewTerm(
+    joint_pos_limits = RewTerm(
         func=mdp.joint_pos_limits,
         weight=-10.0,
         params={"asset_cfg": SceneEntityCfg("robot", joint_names=[".*"])},
@@ -210,8 +258,23 @@ class TerminationsCfg:
 
 @configclass
 class CurriculumCfg:
-    """Curriculum terms for the MDP."""
+    """Curriculum terms for the MDP.
 
+    Phase 1 (steps 0 ~ JOINT_DEVIATION_START): learn basic hopping —
+        active terms: phase_contact (+2.0), action_rate_l2 (-1e-2), joint_pos_limits (-10.0).
+    Phase 2 (steps JOINT_DEVIATION_START ~ TRACK_ANG_VEL_START): add pose regularization.
+    Phase 3 (steps TRACK_ANG_VEL_START+): add angular velocity tracking.
+    """
+
+    enable_joint_deviation = CurrTerm(
+        func=modify_reward_weight,
+        # params={"term_name": "joint_deviation_l1", "weight": -0.1, "num_steps": 300*24 },
+        params={"term_name": "joint_deviation_phase_exp", "weight": 0.5, "num_steps": 300*24 },
+    )
+    enable_track_angular_velocity = CurrTerm(
+        func=modify_reward_weight,
+        params={"term_name": "track_angular_velocity", "weight": 1.0, "num_steps": 300*24},
+    )
     pass
 
 
@@ -256,4 +319,9 @@ class Go2HoppingEnvCfg(ManagerBasedRLEnvCfg):
         self.viewer.body_name = None
 
     def apply_play_overrides(self):
+        self.commands.twist.ranges.lin_vel_x = (0.0, 0.0)
+        self.commands.twist.ranges.lin_vel_y = (0.0, 0.0)
+        self.commands.twist.ranges.ang_vel_z = (0.3, 0.3)
+        self.commands.twist.heading_command = False
+        self.commands.twist.rel_standing_envs = 0.0
         return self
