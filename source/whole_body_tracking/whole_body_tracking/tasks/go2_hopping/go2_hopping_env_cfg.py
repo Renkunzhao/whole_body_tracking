@@ -116,6 +116,11 @@ class CommandsCfg:
             heading=(-math.pi, math.pi),
         ),
     )
+    hop = mdp.HoppingMetricsCommandCfg(
+        asset_cfg=SceneEntityCfg("robot"),
+        sensor_cfg=SceneEntityCfg("contact_forces", body_names=list(GO2_FOOT_BODY_NAMES)),
+        contact_threshold=5.0,
+    )
 
 
 @configclass
