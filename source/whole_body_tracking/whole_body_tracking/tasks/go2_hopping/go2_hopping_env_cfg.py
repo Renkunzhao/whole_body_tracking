@@ -214,14 +214,26 @@ class EventCfg:
 class RewardsCfg:
     """Reward terms for the MDP."""
 
+    # phase_contact = RewTerm(
+    #     func=mdp.phase_contact,
+    #     weight=2.0,
+    #     params={
+    #         "sensor_cfg": SceneEntityCfg("contact_forces", body_names=list(GO2_FOOT_BODY_NAMES)),
+    #         "cycle_time": HOPPING_CYCLE_TIME,
+    #         "stance_fraction": HOPPING_STANCE_FRACTION,
+    #         "contact_threshold": 5.0,
+    #     },
+    # )
     phase_contact = RewTerm(
-        func=mdp.phase_contact,
+        func=mdp.phase_contact_distance,
         weight=2.0,
         params={
-            "sensor_cfg": SceneEntityCfg("contact_forces", body_names=list(GO2_FOOT_BODY_NAMES)),
+            "asset_cfg": SceneEntityCfg("robot", body_names=list(GO2_FOOT_BODY_NAMES)),
             "cycle_time": HOPPING_CYCLE_TIME,
             "stance_fraction": HOPPING_STANCE_FRACTION,
-            "contact_threshold": 5.0,
+            "contact_height": 0.024,   # 对齐静止脚 z，让 sigmoid 在最大梯度处（σ=0.5, σ'=0.25），bootstrap 最快
+            "softness": 0.005,          # 过渡区 ±1cm
+            "surface_z": 0.0,
         },
     )
     # note: this term sum all joints' deviations, so the weight should be divided by the number of joints to keep the reward magnitude consistent when changing the robot

@@ -78,3 +78,33 @@ def phase_contact(
     all_feet_contact = torch.all(contacts, dim=-1)
     all_feet_air = torch.all(~contacts, dim=-1)
     return torch.where(in_stance, all_feet_contact, all_feet_air).float()
+
+def phase_contact_distance(
+    env: ManagerBasedRLEnv,
+    asset_cfg: SceneEntityCfg,
+    cycle_time: float,
+    stance_fraction: float,
+    contact_height: float,
+    softness: float = 0.01,
+    surface_z: float = 0.0,
+) -> torch.Tensor:
+    """Distance-based drop-in for ``phase_contact`` with a sigmoid-soft threshold.
+
+    ``in_contact(foot)`` is a smooth sigmoid around ``surface_z + contact_height``
+    with transition width ``softness`` (meters); values near 1 mean the foot is
+    below the threshold, near 0 mean above. The stance/flight reward is then the
+    (soft) AND of per-foot contact/air, giving continuous gradient even when feet
+    only lift by a few millimeters.
+
+    Works for rigid ground (pass the ground height as ``surface_z``) and any
+    setup where you can provide a per-env surface height — for a trampoline,
+    read the center node z and pass it in via a wrapper.
+    """
+    asset: Articulation = env.scene[asset_cfg.name]
+    foot_z_local = asset.data.body_pos_w[:, asset_cfg.body_ids, 2] - env.scene.env_origins[:, 2:3]
+    in_contact = torch.sigmoid((surface_z + contact_height - foot_z_local) / softness)
+
+    in_stance = _phase(env, cycle_time) < stance_fraction
+    all_feet_contact = in_contact.prod(dim=-1)
+    all_feet_air = (1.0 - in_contact).prod(dim=-1)
+    return torch.where(in_stance, all_feet_contact, all_feet_air)
