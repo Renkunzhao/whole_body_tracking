@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 
 import isaaclab.sim as sim_utils
-from isaaclab.assets import ArticulationCfg, AssetBaseCfg
+from isaaclab.assets import ArticulationCfg, AssetBaseCfg, DeformableObjectCfg
 from isaaclab.envs import ManagerBasedRLEnvCfg
 from isaaclab.envs.mdp.commands import UniformVelocityCommandCfg
 from isaaclab.envs.mdp.curriculums import modify_reward_weight
@@ -30,6 +30,16 @@ from whole_body_tracking.robots.go2 import (
     GO2_FOOT_BODY_NAMES,
     get_go2_cfg,
     get_go2_spawn_cfg,
+)
+from whole_body_tracking.tasks.tracking.mdp import (
+    RandomizeTrampolineProperties,
+    TrampolinePinningActionCfg,
+    reapply_trampoline_pinning,
+)
+from whole_body_tracking.utils.trampoline_deformable import (
+    TRAMPOLINE_DR_MASS_RANGE,
+    TRAMPOLINE_DR_YOUNGS_MODULUS_RANGE,
+    make_trampoline_cfg,
 )
 
 ##
@@ -62,20 +72,8 @@ GO2_HOPPING_CFG = get_go2_cfg(
 
 @configclass
 class MySceneCfg(InteractiveSceneCfg):
-    """Configuration for the terrain scene with a legged robot."""
+    """Base scene: robot, lights, contact sensor. Terrain is added by subclasses."""
 
-    # ground terrain
-    terrain = TerrainImporterCfg(
-        prim_path="/World/ground",
-        terrain_type="plane",
-        collision_group=-1,
-        physics_material=sim_utils.RigidBodyMaterialCfg(
-            friction_combine_mode="multiply",
-            restitution_combine_mode="multiply",
-            static_friction=1.0,
-            dynamic_friction=1.0,
-        ),
-    )
     # robots
     robot: ArticulationCfg = GO2_HOPPING_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
     # lights
@@ -89,6 +87,23 @@ class MySceneCfg(InteractiveSceneCfg):
     )
     contact_forces = ContactSensorCfg(
         prim_path="{ENV_REGEX_NS}/Robot/.*", history_length=3, track_air_time=True, force_threshold=10.0, debug_vis=True
+    )
+
+
+@configclass
+class FlatSceneCfg(MySceneCfg):
+    """Scene with a flat ground plane."""
+
+    terrain = TerrainImporterCfg(
+        prim_path="/World/ground",
+        terrain_type="plane",
+        collision_group=-1,
+        physics_material=sim_utils.RigidBodyMaterialCfg(
+            friction_combine_mode="multiply",
+            restitution_combine_mode="multiply",
+            static_friction=1.0,
+            dynamic_friction=1.0,
+        ),
     )
 
 
@@ -302,7 +317,10 @@ class CurriculumCfg:
 
 @configclass
 class Go2HoppingEnvCfg(ManagerBasedRLEnvCfg):
-    """Configuration for the hopping environment."""
+    """Base hopping environment configuration (terrain-agnostic).
+
+    Subclasses must provide a concrete scene with a terrain/support asset.
+    """
 
     # Scene settings
     scene: MySceneCfg = MySceneCfg(num_envs=4096, env_spacing=2.5)
@@ -324,9 +342,6 @@ class Go2HoppingEnvCfg(ManagerBasedRLEnvCfg):
         # simulation settings
         self.sim.dt = 0.005
         self.sim.render_interval = self.decimation
-        terrain = getattr(self.scene, "terrain", None)
-        if terrain is not None:
-            self.sim.physics_material = terrain.physics_material
         self.sim.physx.gpu_max_rigid_patch_count = 10 * 2**15
         # viewer settings
         self.viewer.eye = (2.5, 2.5, 1.5)
@@ -343,3 +358,58 @@ class Go2HoppingEnvCfg(ManagerBasedRLEnvCfg):
         self.commands.twist.rel_standing_envs = 0.0
         self.events.push_robot = None
         return self
+
+
+@configclass
+class Go2HoppingFlatEnvCfg(Go2HoppingEnvCfg):
+    """Hopping on a flat ground plane."""
+
+    scene: FlatSceneCfg = FlatSceneCfg(num_envs=4096, env_spacing=2.5)
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.sim.physics_material = self.scene.terrain.physics_material
+
+
+##
+# Trampoline variant
+##
+
+
+@configclass
+class TrampolineSceneCfg(MySceneCfg):
+    """Scene with a deformable trampoline instead of a rigid ground plane."""
+
+    trampoline: DeformableObjectCfg = make_trampoline_cfg("{ENV_REGEX_NS}/Trampoline")
+
+
+@configclass
+class TrampolineActionsCfg(ActionsCfg):
+    """Actions with an extra term to pin the trampoline rim each step."""
+
+    trampoline_pin = TrampolinePinningActionCfg(asset_name="trampoline")
+
+
+@configclass
+class TrampolineEventCfg(EventCfg):
+    """Events with trampoline material/mass randomization and pinning refresh on reset."""
+
+    randomize_trampoline_properties = EventTerm(
+        func=RandomizeTrampolineProperties,
+        mode="reset",
+        params={
+            "asset_name": "trampoline",
+            "youngs_modulus_range": TRAMPOLINE_DR_YOUNGS_MODULUS_RANGE,
+            "mass_range": TRAMPOLINE_DR_MASS_RANGE,
+        },
+    )
+    reapply_trampoline_pinning = EventTerm(func=reapply_trampoline_pinning, mode="reset")
+
+
+@configclass
+class Go2HoppingTrampolineEnvCfg(Go2HoppingEnvCfg):
+    """Hopping on a deformable trampoline."""
+
+    scene: TrampolineSceneCfg = TrampolineSceneCfg(num_envs=2048, env_spacing=4.0, replicate_physics=False)
+    actions: TrampolineActionsCfg = TrampolineActionsCfg()
+    events: TrampolineEventCfg = TrampolineEventCfg()
