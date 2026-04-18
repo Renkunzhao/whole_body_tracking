@@ -54,9 +54,6 @@ VELOCITY_RANGE = {
     "yaw": (-0.78, 0.78),
 }
 
-HOPPING_CYCLE_TIME = 1.0
-HOPPING_STANCE_FRACTION = 0.45
-
 GO2_HOPPING_CFG = get_go2_cfg(
     spawn=get_go2_spawn_cfg(
         enabled_self_collisions=True,
@@ -131,10 +128,14 @@ class CommandsCfg:
             heading=(-math.pi, math.pi),
         ),
     )
-    hop = mdp.HoppingMetricsCommandCfg(
+    hop = mdp.UniformHoppingCommandCfg(
         asset_cfg=SceneEntityCfg("robot"),
         sensor_cfg=SceneEntityCfg("contact_forces", body_names=list(GO2_FOOT_BODY_NAMES)),
         contact_threshold=5.0,
+        ranges=mdp.UniformHoppingCommandCfg.Ranges(
+            peak_height=(0.05, 1.0),
+            stance_time=(0.1, 0.50),
+        ),
     )
 
 
@@ -156,7 +157,8 @@ class ObservationsCfg:
         """Observations for policy group."""
 
         # observation terms (order preserved)
-        phase = ObsTerm(func=mdp.sin_cos_phase, params={"cycle_time": HOPPING_CYCLE_TIME})
+        phase = ObsTerm(func=mdp.sin_cos_phase, params={"command_name": "hop"})
+        hop_command = ObsTerm(func=mdp.generated_commands, params={"command_name": "hop"})
         base_ang_vel = ObsTerm(func=mdp.base_ang_vel, noise=Unoise(n_min=-0.2, n_max=0.2))
         projected_gravity = ObsTerm(func=mdp.projected_gravity, noise=Unoise(n_min=-0.05, n_max=0.05))
         joint_pos = ObsTerm(func=mdp.joint_pos_rel, noise=Unoise(n_min=-0.01, n_max=0.01))
@@ -214,36 +216,33 @@ class EventCfg:
 class RewardsCfg:
     """Reward terms for the MDP."""
 
-    # phase_contact = RewTerm(
-    #     func=mdp.phase_contact,
-    #     weight=2.0,
-    #     params={
-    #         "sensor_cfg": SceneEntityCfg("contact_forces", body_names=list(GO2_FOOT_BODY_NAMES)),
-    #         "cycle_time": HOPPING_CYCLE_TIME,
-    #         "stance_fraction": HOPPING_STANCE_FRACTION,
-    #         "contact_threshold": 5.0,
-    #     },
-    # )
     phase_contact = RewTerm(
-        func=mdp.phase_contact_distance,
+        func=mdp.phase_contact,
         weight=2.0,
         params={
-            "asset_cfg": SceneEntityCfg("robot", body_names=list(GO2_FOOT_BODY_NAMES)),
-            "cycle_time": HOPPING_CYCLE_TIME,
-            "stance_fraction": HOPPING_STANCE_FRACTION,
-            "contact_height": 0.024,   # 对齐静止脚 z，让 sigmoid 在最大梯度处（σ=0.5, σ'=0.25），bootstrap 最快
-            "softness": 0.005,          # 过渡区 ±1cm
-            "surface_z": 0.0,
+            "sensor_cfg": SceneEntityCfg("contact_forces", body_names=list(GO2_FOOT_BODY_NAMES)),
+            "command_name": "hop",
+            "contact_threshold": 5.0,
         },
     )
+    # phase_contact = RewTerm(
+    #     func=mdp.phase_contact_distance,
+    #     weight=2.0,
+    #     params={
+    #         "asset_cfg": SceneEntityCfg("robot", body_names=list(GO2_FOOT_BODY_NAMES)),
+    #         "command_name": "hop",
+    #         "contact_height": 0.024,   # 对齐静止脚 z，让 sigmoid 在最大梯度处（σ=0.5, σ'=0.25），bootstrap 最快
+    #         "softness": 0.005,          # 过渡区 ±1cm
+    #         "surface_z": 0.0,
+    #     },
+    # )
     # note: this term sum all joints' deviations, so the weight should be divided by the number of joints to keep the reward magnitude consistent when changing the robot
     # joint_deviation_l1 = RewTerm(func=mdp.joint_deviation_l1, weight=0.0)
     joint_deviation_phase_exp = RewTerm(
         func=mdp.joint_deviation_phase_exp,
         weight=0.0,
         params={
-            "cycle_time": HOPPING_CYCLE_TIME,
-            "stance_fraction": HOPPING_STANCE_FRACTION,
+            "command_name": "hop",
             "std_stance": {
                 ".*_hip_joint": 0.3,   # 严格：站立时 hip 不能晃
                 ".*_thigh_joint": 0.3,
@@ -363,11 +362,14 @@ class Go2HoppingEnvCfg(ManagerBasedRLEnvCfg):
         self.viewer.body_name = None
 
     def apply_play_overrides(self):
+        self.episode_length_s = 1.0e9
         self.commands.twist.ranges.lin_vel_x = (0.0, 0.0)
         self.commands.twist.ranges.lin_vel_y = (0.0, 0.0)
-        self.commands.twist.ranges.ang_vel_z = (0.3, 0.3)
+        self.commands.twist.ranges.ang_vel_z = (0.0, 0.0)
         self.commands.twist.heading_command = False
         self.commands.twist.rel_standing_envs = 0.0
+        self.commands.hop.ranges.peak_height = (0.265, 0.265)
+        self.commands.hop.ranges.stance_time = (0.6, 0.6)
         self.events.push_robot = None
         return self
 

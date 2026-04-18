@@ -9,12 +9,8 @@ if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
 
 
-def phase(env: ManagerBasedRLEnv, cycle_time: float) -> torch.Tensor:
-    """Current normalized hopping phase in [0, 1)."""
-    return torch.remainder(env.episode_length_buf.to(torch.float32) * env.step_dt / cycle_time, 1.0)
-
-
-def sin_cos_phase(env: ManagerBasedRLEnv, cycle_time: float) -> torch.Tensor:
-    """Sine/cosine encoding of the hopping phase."""
-    phase_rad = 2.0 * math.pi * phase(env, cycle_time)
+def sin_cos_phase(env: ManagerBasedRLEnv, command_name: str = "hop") -> torch.Tensor:
+    """Sine/cosine encoding of the hopping phase, read from a hopping command term."""
+    phase = env.command_manager.get_term(command_name).phase
+    phase_rad = 2.0 * math.pi * phase
     return torch.stack((torch.sin(phase_rad), torch.cos(phase_rad)), dim=-1)
