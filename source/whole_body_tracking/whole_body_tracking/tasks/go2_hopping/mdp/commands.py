@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import torch
 from collections.abc import Sequence
+from dataclasses import MISSING
 from typing import TYPE_CHECKING
 
 from isaaclab.assets import Articulation
@@ -54,6 +55,11 @@ class UniformHoppingCommand(CommandTerm):
         self._last_air_time = torch.zeros(n, device=dev)
         self._last_stance_time = torch.zeros(n, device=dev)
         self._last_peak_z = torch.zeros(n, device=dev)
+        # One-step pulse flags latched each step by ``_update_metrics`` so that
+        # downstream terms (e.g. landing-event rewards) can fire exactly on the
+        # transition without duplicating the air/contact detection logic.
+        self._just_landed = torch.zeros(n, dtype=torch.bool, device=dev)
+        self._just_took_off = torch.zeros(n, dtype=torch.bool, device=dev)
 
         # Per-env event counters for incremental-mean metrics. Reset only on env
         # reset (in ``reset()`` override), not on mid-episode command resample —
@@ -105,6 +111,19 @@ class UniformHoppingCommand(CommandTerm):
     def last_stance_time(self) -> torch.Tensor:
         return self._last_stance_time
 
+    @property
+    def just_landed(self) -> torch.Tensor:
+        return self._just_landed
+
+    @property
+    def just_took_off(self) -> torch.Tensor:
+        return self._just_took_off
+
+    @property
+    def flight_time_target(self) -> torch.Tensor:
+        """Commanded ballistic flight time per env: ``2·sqrt(2·h*/g)``."""
+        return 2.0 * torch.sqrt(2.0 * self._peak_h_target / _G)
+
     def _update_metrics(self):
         forces = self.sensor.data.net_forces_w_history[:, :, self._body_ids, :]
         contacts = torch.max(torch.norm(forces, dim=-1), dim=1)[0] > self.cfg.contact_threshold
@@ -120,6 +139,7 @@ class UniformHoppingCommand(CommandTerm):
 
         # landing event: latch air_time + peak_z, update peak-height running mean
         just_landed = self._in_air & ~all_air
+        self._just_landed = just_landed
         self._last_air_time = torch.where(just_landed, self._air_time, self._last_air_time)
         self._last_peak_z = torch.where(just_landed, self._peak_z, self._last_peak_z)
         new_landing_count = torch.where(just_landed, self._landing_count + 1.0, self._landing_count)
@@ -137,6 +157,7 @@ class UniformHoppingCommand(CommandTerm):
 
         # takeoff event: latch stance_time, update stance-time running mean
         just_took_off = ~self._in_air & all_air
+        self._just_took_off = just_took_off
         self._last_stance_time = torch.where(just_took_off, self._stance_accum, self._last_stance_time)
         new_takeoff_count = torch.where(just_took_off, self._takeoff_count + 1.0, self._takeoff_count)
         stance_err = torch.abs(self._last_stance_time - self._stance_time_target)
@@ -191,11 +212,10 @@ class UniformHoppingCommandCfg(CommandTermCfg):
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
     sensor_cfg: SceneEntityCfg = SceneEntityCfg("contact_forces")
     contact_threshold: float = 5.0
-    resampling_time_range: tuple[float, float] = (3.0, 8.0)
 
     @configclass
     class Ranges:
-        peak_height: tuple[float, float] = (0.05, 0.25)
-        stance_time: tuple[float, float] = (0.15, 0.60)
+        peak_height: tuple[float, float] = MISSING
+        stance_time: tuple[float, float] = MISSING
 
-    ranges: Ranges = Ranges()
+    ranges: Ranges = MISSING

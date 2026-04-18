@@ -132,9 +132,10 @@ class CommandsCfg:
         asset_cfg=SceneEntityCfg("robot"),
         sensor_cfg=SceneEntityCfg("contact_forces", body_names=list(GO2_FOOT_BODY_NAMES)),
         contact_threshold=5.0,
+        resampling_time_range=(1.0e9, 1.0e9),
         ranges=mdp.UniformHoppingCommandCfg.Ranges(
-            peak_height=(0.05, 1.0),
-            stance_time=(0.1, 0.50),
+            peak_height=(0.5, 0.5),
+            stance_time=(0.5, 0.5),
         ),
     )
 
@@ -225,6 +226,17 @@ class RewardsCfg:
             "contact_threshold": 5.0,
         },
     )
+    # Pulse-on-landing reward that ties each commanded flight window to a
+    # single continuous air phase; breaks the "two short hops per window"
+    # local optimum that phase_contact alone admits when t_flight* is large.
+    air_time_tracking = RewTerm(
+        func=mdp.air_time_tracking,
+        weight=140.0,
+        params={
+            "command_name": "hop",
+            "std": 0.3,
+        },
+    )
     # phase_contact = RewTerm(
     #     func=mdp.phase_contact_distance,
     #     weight=2.0,
@@ -308,15 +320,15 @@ class CurriculumCfg:
     enable_joint_deviation = CurrTerm(
         func=modify_reward_weight,
         # params={"term_name": "joint_deviation_l1", "weight": -0.1, "num_steps": 300*24 },
-        params={"term_name": "joint_deviation_phase_exp", "weight": 0.5, "num_steps": 300*24 },
+        params={"term_name": "joint_deviation_phase_exp", "weight": 0.5, "num_steps": 1000*24 },
     )
     enable_track_linear_velocity = CurrTerm(
         func=modify_reward_weight,
-        params={"term_name": "track_linear_velocity", "weight": 1.0, "num_steps": 300*24},
+        params={"term_name": "track_linear_velocity", "weight": 1.0, "num_steps": 1000*24},
     )
     enable_track_angular_velocity = CurrTerm(
         func=modify_reward_weight,
-        params={"term_name": "track_angular_velocity", "weight": 1.0, "num_steps": 300*24},
+        params={"term_name": "track_angular_velocity", "weight": 1.0, "num_steps": 1000*24},
     )
     pass
 
@@ -349,7 +361,7 @@ class Go2HoppingEnvCfg(ManagerBasedRLEnvCfg):
         """Post initialization."""
         # general settings
         self.decimation = 4
-        self.episode_length_s = 10.0
+        self.episode_length_s = 20.0
         # simulation settings
         self.sim.dt = 0.005
         self.sim.render_interval = self.decimation
@@ -368,8 +380,8 @@ class Go2HoppingEnvCfg(ManagerBasedRLEnvCfg):
         self.commands.twist.ranges.ang_vel_z = (0.0, 0.0)
         self.commands.twist.heading_command = False
         self.commands.twist.rel_standing_envs = 0.0
-        self.commands.hop.ranges.peak_height = (0.265, 0.265)
-        self.commands.hop.ranges.stance_time = (0.6, 0.6)
+        self.commands.hop.ranges.peak_height = (0.5, 0.5)
+        self.commands.hop.ranges.stance_time = (0.5, 0.5)
         self.events.push_robot = None
         return self
 

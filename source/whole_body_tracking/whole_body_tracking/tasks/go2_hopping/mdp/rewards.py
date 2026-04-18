@@ -72,6 +72,25 @@ def phase_contact(
     return torch.where(in_stance, all_feet_contact, all_feet_air).float()
 
 
+def air_time_tracking(
+    env: ManagerBasedRLEnv,
+    command_name: str,
+    std: float,
+) -> torch.Tensor:
+    """Pulse reward on landing for matching the commanded single-hop flight time.
+
+    Fires exactly one step per air->contact transition with value
+    ``exp(-((last_air_time - t_flight*) / std)^2)``. Because the pulse is tied
+    to a single continuous air phase, splitting one commanded flight window
+    into multiple short hops incurs a much larger squared error on each landing
+    than a single correctly-timed hop, breaking the double-hop local optimum
+    that ``phase_contact`` alone admits.
+    """
+    cmd = env.command_manager.get_term(command_name)
+    err = cmd.last_air_time - cmd.flight_time_target
+    return cmd.just_landed.float() * torch.exp(-torch.square(err / std))
+
+
 def phase_contact_distance(
     env: ManagerBasedRLEnv,
     asset_cfg: SceneEntityCfg,
