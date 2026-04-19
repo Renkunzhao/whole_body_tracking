@@ -52,6 +52,12 @@ class UniformHoppingCommand(CommandTerm):
         self._air_time = torch.zeros(n, device=dev)
         self._stance_accum = torch.zeros(n, device=dev)
         self._peak_z = torch.zeros(n, device=dev)
+        # Base z latched at the most recent takeoff event. ``peak_h_target`` is
+        # commanded *relative to takeoff height* (consistent with the ballistic
+        # ``flight_time_target = 2·sqrt(2·h*/g)`` formula, which assumes landing
+        # back at takeoff altitude), so the realized hop height must be measured
+        # as ``last_peak_z - takeoff_z`` rather than absolute world z.
+        self._takeoff_z = torch.zeros(n, device=dev)
         self._last_air_time = torch.zeros(n, device=dev)
         self._last_stance_time = torch.zeros(n, device=dev)
         self._last_peak_z = torch.zeros(n, device=dev)
@@ -104,6 +110,11 @@ class UniformHoppingCommand(CommandTerm):
         return self._last_peak_z
 
     @property
+    def last_peak_height(self) -> torch.Tensor:
+        """Realized apex height above takeoff for the most recent completed hop."""
+        return self._last_peak_z - self._takeoff_z
+
+    @property
     def last_air_time(self) -> torch.Tensor:
         return self._last_air_time
 
@@ -137,13 +148,16 @@ class UniformHoppingCommand(CommandTerm):
         self._stance_accum = torch.where(~all_air, self._stance_accum + dt, self._stance_accum)
         self._peak_z = torch.where(all_air, torch.maximum(self._peak_z, z), self._peak_z)
 
-        # landing event: latch air_time + peak_z, update peak-height running mean
+        # landing event: latch air_time + peak_z, update peak-height running mean.
+        # ``peak_h_target`` is relative to takeoff height, so the realized hop
+        # height compared against it is ``last_peak_z - takeoff_z`` (where
+        # ``takeoff_z`` was latched at the most recent ``just_took_off`` event).
         just_landed = self._in_air & ~all_air
         self._just_landed = just_landed
         self._last_air_time = torch.where(just_landed, self._air_time, self._last_air_time)
         self._last_peak_z = torch.where(just_landed, self._peak_z, self._last_peak_z)
         new_landing_count = torch.where(just_landed, self._landing_count + 1.0, self._landing_count)
-        peak_err = torch.abs(self._last_peak_z - self._peak_h_target)
+        peak_err = torch.abs((self._last_peak_z - self._takeoff_z) - self._peak_h_target)
         # incremental mean: m_n = m_{n-1} + (x_n - m_{n-1}) / n
         self.metrics["error_peak_height"] = torch.where(
             just_landed,
@@ -155,9 +169,11 @@ class UniformHoppingCommand(CommandTerm):
         self._air_time = torch.where(just_landed, zero, self._air_time)
         self._peak_z = torch.where(just_landed, zero, self._peak_z)
 
-        # takeoff event: latch stance_time, update stance-time running mean
+        # takeoff event: latch stance_time and the takeoff base z (used by the
+        # next landing's peak-height error), update stance-time running mean.
         just_took_off = ~self._in_air & all_air
         self._just_took_off = just_took_off
+        self._takeoff_z = torch.where(just_took_off, z, self._takeoff_z)
         self._last_stance_time = torch.where(just_took_off, self._stance_accum, self._last_stance_time)
         new_takeoff_count = torch.where(just_took_off, self._takeoff_count + 1.0, self._takeoff_count)
         stance_err = torch.abs(self._last_stance_time - self._stance_time_target)
@@ -187,6 +203,7 @@ class UniformHoppingCommand(CommandTerm):
         self._air_time[env_ids] = 0.0
         self._stance_accum[env_ids] = 0.0
         self._peak_z[env_ids] = 0.0
+        self._takeoff_z[env_ids] = 0.0
 
     def _update_command(self):
         pass

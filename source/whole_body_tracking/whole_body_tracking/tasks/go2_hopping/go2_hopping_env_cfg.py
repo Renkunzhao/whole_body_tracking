@@ -134,7 +134,7 @@ class CommandsCfg:
         contact_threshold=5.0,
         resampling_time_range=(1.0e9, 1.0e9),
         ranges=mdp.UniformHoppingCommandCfg.Ranges(
-            peak_height=(0.5, 0.5),
+            peak_height=(0.6, 0.6),
             stance_time=(0.5, 0.5),
         ),
     )
@@ -202,12 +202,12 @@ class EventCfg:
     )
 
     # interval
-    push_robot = EventTerm(
-        func=mdp.push_by_setting_velocity,
-        mode="interval",
-        interval_range_s=(1.0, 3.0),
-        params={"velocity_range": VELOCITY_RANGE},
-    )
+    # push_robot = EventTerm(
+    #     func=mdp.push_by_setting_velocity,
+    #     mode="interval",
+    #     interval_range_s=(1.0, 3.0),
+    #     params={"velocity_range": VELOCITY_RANGE},
+    # )
 
     # reset
     reset_all = EventTerm(func=mdp.reset_scene_to_default, mode="reset")
@@ -256,14 +256,14 @@ class RewardsCfg:
         params={
             "command_name": "hop",
             "std_stance": {
-                ".*_hip_joint": 0.3,   # 严格：站立时 hip 不能晃
-                ".*_thigh_joint": 0.3,
-                ".*_calf_joint": 0.6,
+                ".*_hip_joint": 0.5,   # 严格：站立时 hip 不能晃
+                ".*_thigh_joint": 1.0,
+                ".*_calf_joint": 1.0,
             },
             "std_flight": {
-                ".*_hip_joint": 0.3,   # 飞行时放松一点
-                ".*_thigh_joint": 0.3,  # 膝大幅摆动
-                ".*_calf_joint": 0.6,
+                ".*_hip_joint": 0.5,   # 飞行时放松一点
+                ".*_thigh_joint": 1.0,  # 膝大幅摆动
+                ".*_calf_joint": 1.0,
             },
             "asset_cfg": SceneEntityCfg("robot", joint_names=[".*"]),
         },
@@ -319,7 +319,6 @@ class CurriculumCfg:
 
     enable_joint_deviation = CurrTerm(
         func=modify_reward_weight,
-        # params={"term_name": "joint_deviation_l1", "weight": -0.1, "num_steps": 300*24 },
         params={"term_name": "joint_deviation_phase_exp", "weight": 0.5, "num_steps": 1000*24 },
     )
     enable_track_linear_velocity = CurrTerm(
@@ -380,7 +379,7 @@ class Go2HoppingEnvCfg(ManagerBasedRLEnvCfg):
         self.commands.twist.ranges.ang_vel_z = (0.0, 0.0)
         self.commands.twist.heading_command = False
         self.commands.twist.rel_standing_envs = 0.0
-        self.commands.hop.ranges.peak_height = (0.5, 0.5)
+        self.commands.hop.ranges.peak_height = (0.6, 0.6)
         self.commands.hop.ranges.stance_time = (0.5, 0.5)
         self.events.push_robot = None
         return self
