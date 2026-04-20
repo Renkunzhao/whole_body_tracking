@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from isaaclab.managers import RewardTermCfg as RewTerm
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.utils import configclass
 
@@ -35,7 +36,6 @@ class Go2FlatEnvCfg(TrackingEnvCfg):
         super().__post_init__()
 
         self.scene.robot = GO2_TRACKING_CFG.replace(prim_path='{ENV_REGEX_NS}/Robot')
-        self.viewer.body_name = GO2_TRACKING_ANCHOR_BODY_NAME
 
         self.actions.joint_pos.scale = GO2_ACTION_SCALE
 
@@ -49,19 +49,23 @@ class Go2FlatEnvCfg(TrackingEnvCfg):
         self.events.physics_material.params['restitution_range'] = (0.0, 0.0)
         self.events.physics_material.params['make_consistent'] = True
 
-        self.rewards.motion_global_anchor_ori.weight = 1.5
-        self.rewards.motion_body_ang_vel.weight = 2.0
-        self.rewards.motion_body_ang_vel.params['std'] = 6.28
+        # For sideflip
+        # self.rewards.motion_global_anchor_ori.weight = 1.5
+        # self.rewards.motion_body_ang_vel.weight = 2.0
+        # self.rewards.motion_body_ang_vel.params['std'] = 6.28
+
         # mjlab's Go2 setup keeps the self-collision cost effectively inactive for this task.
         # Penalizing all non-foot PhysX contacts is harsher and tends to make aerial phases too conservative.
-        self.rewards.undesired_contacts.weight = 0.0
-        self.rewards.undesired_contacts.params['sensor_cfg'] = SceneEntityCfg(
-            'contact_forces', body_names=list(GO2_NON_FOOT_CONTACT_BODY_NAMES)
-        )
+        # self.rewards.undesired_contacts.weight = 0.0
+        # self.rewards.undesired_contacts.params['sensor_cfg'] = SceneEntityCfg(
+        #     'contact_forces', body_names=list(GO2_NON_FOOT_CONTACT_BODY_NAMES)
+        # )
 
-        self.terminations.anchor_pos.params['threshold'] = 0.5
-        self.terminations.ee_body_pos.params['threshold'] = 0.6
-        self.terminations.ee_body_pos.params['body_names'] = list(GO2_FOOT_BODY_NAMES)
+        # self.terminations.anchor_pos.params['threshold'] = 0.5
+        # self.terminations.ee_body_pos.params['threshold'] = 0.6
+        # self.terminations.ee_body_pos.params['body_names'] = list(GO2_FOOT_BODY_NAMES)
+
+        self.viewer.origin_type = "world"
 
     def apply_play_overrides(self):
         self.episode_length_s = int(1e9)
@@ -70,10 +74,7 @@ class Go2FlatEnvCfg(TrackingEnvCfg):
         self.commands.motion.pose_range = {}
         self.commands.motion.velocity_range = {}
         self.commands.motion.sampling_mode = "start"
-        self.commands.motion.debug_vis = False
-        self.scene.contact_forces.debug_vis = False
         # Keep the play camera static so manual mouse control is not overridden by asset tracking.
-        self.viewer.origin_type = "world"
         return self
 
 
@@ -83,3 +84,21 @@ class Go2FlatWoStateEstimationEnvCfg(Go2FlatEnvCfg):
         super().__post_init__()
         self.observations.policy.motion_anchor_pos_b = None
         self.observations.policy.base_lin_vel = None
+
+@configclass
+class Go2FlatJumpWoStateEstimationEnvCfg(Go2FlatWoStateEstimationEnvCfg):
+    def __post_init__(self):
+        super().__post_init__()
+
+        self.terminations.anchor_pos.params['threshold'] = 0.5
+
+        # 1
+        self.rewards.motion_global_anchor_pos.weight = 2.0
+        self.rewards.motion_global_anchor_pos.params['std'] = 0.2
+        # 2
+        self.rewards.motion_body_lin_vel.weight = 2.0
+        self.rewards.motion_body_lin_vel.params['std'] = 0.7
+        # 3
+        self.rewards.motion_global_anchor_vel.weight = 1.0
+        self.rewards.motion_global_anchor_vel.params['std'] = 0.8
+

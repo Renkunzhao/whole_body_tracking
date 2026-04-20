@@ -121,23 +121,32 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
     # reset environment
     peak_height_index = 0
-    peak_height_updates_enabled = _set_peak_height_range(env, PEAK_HEIGHT_PLAY_RANGES[peak_height_index])
+    # peak_height_updates_enabled = _set_peak_height_range(env, PEAK_HEIGHT_PLAY_RANGES[peak_height_index])
     elapsed_time_s = 0.0
     next_peak_height_update_s = PEAK_HEIGHT_UPDATE_INTERVAL_S
     obs = env.get_observations()
+    hop_command = env.unwrapped.command_manager.get_term("hop") if "hop" in env.unwrapped.command_manager.active_terms else None
+    hop_count = 0
     # simulate environment
     while simulation_app.is_running():
-        if peak_height_updates_enabled and elapsed_time_s >= next_peak_height_update_s:
-            peak_height_index = (peak_height_index + 1) % len(PEAK_HEIGHT_PLAY_RANGES)
-            _set_peak_height_range(env, PEAK_HEIGHT_PLAY_RANGES[peak_height_index])
-            obs = env.get_observations()
-            next_peak_height_update_s += PEAK_HEIGHT_UPDATE_INTERVAL_S
+        # if peak_height_updates_enabled and elapsed_time_s >= next_peak_height_update_s:
+        #     peak_height_index = (peak_height_index + 1) % len(PEAK_HEIGHT_PLAY_RANGES)
+        #     _set_peak_height_range(env, PEAK_HEIGHT_PLAY_RANGES[peak_height_index])
+        #     obs = env.get_observations()
+        #     next_peak_height_update_s += PEAK_HEIGHT_UPDATE_INTERVAL_S
 
         # run policy inference without putting mutable environment buffers into inference mode
         with torch.inference_mode():
             actions = policy(obs)
         obs, _, _, _ = env.step(actions)
         elapsed_time_s += env.unwrapped.step_dt
+
+        if hop_command is not None and bool(hop_command.just_landed[0]):
+            hop_count += 1
+            peak_h = float(hop_command.last_peak_height[0])
+            peak_z = float(hop_command.last_peak_z[0])
+            air_t = float(hop_command.last_air_time[0])
+            print(f"[HOP {hop_count:04d}] peak_height={peak_h:.3f} m (peak_z={peak_z:.3f} m), air_time={air_t:.3f} s")
 
     # close the simulator
     env.close()

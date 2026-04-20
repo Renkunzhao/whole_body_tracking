@@ -85,6 +85,46 @@ def _normalize_optional_str(value: str | None) -> str | None:
     return value if value else None
 
 
+def _install_render_toggle_hotkey(key_name: str = "V") -> None:
+    """Toggle Isaac Sim viewport rendering with a hotkey (default: V), à la IsaacGym."""
+    if args_cli.headless:
+        return
+    try:
+        import carb.input
+        import omni.appwindow
+        from isaaclab.sim import SimulationContext
+    except ImportError as exc:
+        print(f"[WARN] Render-toggle hotkey unavailable: {exc}")
+        return
+
+    state = {"render_on": True, "prev_mode": None}
+
+    def _on_keyboard_event(event, *_):
+        if event.type != carb.input.KeyboardEventType.KEY_PRESS:
+            return True
+        if event.input != getattr(carb.input.KeyboardInput, key_name):
+            return True
+        sim = SimulationContext.instance()
+        if sim is None:
+            return True
+        state["render_on"] = not state["render_on"]
+        if state["render_on"]:
+            target = state["prev_mode"] or sim.RenderMode.FULL_RENDERING
+        else:
+            state["prev_mode"] = sim.render_mode
+            target = sim.RenderMode.NO_RENDERING
+        sim.set_render_mode(target)
+        print(f"[INFO] Viewport rendering {'ON' if state['render_on'] else 'OFF'} (mode={target.name}).")
+        return True
+
+    appwindow = omni.appwindow.get_default_app_window()
+    keyboard = appwindow.get_keyboard()
+    sub = carb.input.acquire_input_interface().subscribe_to_keyboard_events(keyboard, _on_keyboard_event)
+    # keep a reference so the subscription is not garbage-collected
+    _install_render_toggle_hotkey._sub = sub  # type: ignore[attr-defined]
+    print(f"[INFO] Press '{key_name}' to toggle viewport rendering.")
+
+
 def _download_checkpoint_from_wandb(wandb_path: str) -> tuple[str, object]:
     import wandb
 
@@ -169,6 +209,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
     # create isaac environment
     env = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None)
+    _install_render_toggle_hotkey("V")
     # wrap for video recording
     if args_cli.video:
         video_kwargs = {

@@ -122,9 +122,9 @@ class MotionLoader:
 
     def _load_motion(self):
         motion = self._load_csv()
-        if motion.shape[1] != EXPECTED_COLUMNS:
+        if motion.shape[1] < EXPECTED_COLUMNS:
             raise ValueError(
-                f"Go2 CSV must have {EXPECTED_COLUMNS} columns (3 root pos + 4 root quat + 12 joints),"
+                f"Go2 CSV must have at least {EXPECTED_COLUMNS} columns (3 root pos + 4 root quat + 12 joints),"
                 f" but got {motion.shape[1]}."
             )
         if motion.shape[0] < 2:
@@ -133,7 +133,7 @@ class MotionLoader:
         self.motion_base_poss_input = motion[:, :3]
         quat_xyzw = motion[:, 3:7]
         self.motion_base_rots_input = quat_xyzw[:, [3, 0, 1, 2]]
-        self.motion_dof_poss_input = motion[:, 7:]
+        self.motion_dof_poss_input = motion[:, 7:EXPECTED_COLUMNS]
 
         self.input_frames = motion.shape[0]
         self.duration = (self.input_frames - 1) * self.input_dt

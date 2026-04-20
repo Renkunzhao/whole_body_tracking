@@ -210,6 +210,11 @@ class RewardsCfg:
         weight=0.5,
         params={"command_name": "motion", "std": 0.4},
     )
+    motion_global_anchor_vel = RewTerm(
+        func=mdp.motion_global_anchor_velocity_error_exp,
+        weight=0.0,  # disabled by default; jump cfg overrides
+        params={"command_name": "motion", "std": 1.0},
+    )
     motion_body_pos = RewTerm(
         func=mdp.motion_relative_body_position_error_exp,
         weight=1.0,
