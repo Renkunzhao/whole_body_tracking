@@ -11,6 +11,13 @@ from isaaclab.app import AppLauncher
 parser = argparse.ArgumentParser(description="Train an RL agent with RSL-RL.")
 parser.add_argument("--task", type=str, default=None, help="Name of the task.")
 parser.add_argument("--wandb_path", type=str, required=True, help="Wandb run path (entity/project/run_id[/model]).")
+parser.add_argument(
+    "--mode",
+    type=str,
+    default="fixed",
+    choices=["fixed", "apex", "stance"],
+    help="Play mode: 'fixed' keeps a single command, 'apex' cycles peak heights, 'stance' cycles stance times.",
+)
 # append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
 args_cli, hydra_args = parser.parse_known_args()
@@ -44,7 +51,7 @@ import whole_body_tracking.tasks  # noqa: F401
 from whole_body_tracking.utils.task_utils import apply_play_overrides
 
 
-PEAK_HEIGHT_UPDATE_INTERVAL_S = 5.0
+COMMAND_UPDATE_INTERVAL_S = 5
 PEAK_HEIGHT_PLAY_RANGES = (
     (0.1, 0.1),
     (0.2, 0.2),
@@ -52,24 +59,43 @@ PEAK_HEIGHT_PLAY_RANGES = (
     (0.4, 0.4),
     (0.5, 0.5),
     (0.6, 0.6),
-    (0.7, 0.7),
-    (0.8, 0.8),
-    (0.9, 0.9),
-    (1.0, 1.0),
+)
+STANCE_TIME_PLAY_RANGES = (
+    (0.1, 0.1),
+    (0.2, 0.2),
+    (0.3, 0.3),
+    (0.4, 0.4),
+    (0.5, 0.5),
 )
 
 
-def _set_peak_height_range(env, peak_height_range: tuple[float, float]) -> bool:
+def _get_hop_command(env):
     command_manager = getattr(env.unwrapped, "command_manager", None)
     if command_manager is None or "hop" not in command_manager.active_terms:
-        print("[WARN]: Cannot update peak_height range because this task has no 'hop' command.")
-        return False
+        print("[WARN]: Cannot update hop ranges because this task has no 'hop' command.")
+        return None
+    return command_manager.get_term("hop")
 
-    hop_command = command_manager.get_term("hop")
+
+def _set_peak_height_range(env, peak_height_range: tuple[float, float]) -> bool:
+    hop_command = _get_hop_command(env)
+    if hop_command is None:
+        return False
     hop_command.cfg.ranges.peak_height = peak_height_range
     env_ids = torch.arange(env.unwrapped.num_envs, device=env.unwrapped.device)
     hop_command._resample(env_ids)
     print(f"[INFO]: Set hop peak_height range to {peak_height_range}.")
+    return True
+
+
+def _set_stance_time_range(env, stance_time_range: tuple[float, float]) -> bool:
+    hop_command = _get_hop_command(env)
+    if hop_command is None:
+        return False
+    hop_command.cfg.ranges.stance_time = stance_time_range
+    env_ids = torch.arange(env.unwrapped.num_envs, device=env.unwrapped.device)
+    hop_command._resample(env_ids)
+    print(f"[INFO]: Set hop stance_time range to {stance_time_range}.")
     return True
 
 
@@ -120,20 +146,36 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     policy = ppo_runner.get_inference_policy(device=env.unwrapped.device)
 
     # reset environment
-    peak_height_index = 0
-    # peak_height_updates_enabled = _set_peak_height_range(env, PEAK_HEIGHT_PLAY_RANGES[peak_height_index])
+    if args_cli.mode == "apex":
+        cycle_ranges: tuple[tuple[float, float], ...] = PEAK_HEIGHT_PLAY_RANGES
+        cycle_setter = _set_peak_height_range
+    elif args_cli.mode == "stance":
+        cycle_ranges = STANCE_TIME_PLAY_RANGES
+        cycle_setter = _set_stance_time_range
+    else:
+        cycle_ranges = ()
+        cycle_setter = _set_peak_height_range
+
+    cycle_index = 0
+    if cycle_ranges:
+        cycle_updates_enabled = cycle_setter(env, cycle_ranges[cycle_index])
+        update_interval_s = COMMAND_UPDATE_INTERVAL_S
+    else:
+        cycle_updates_enabled = False
+        update_interval_s = 1e9
+        print("[INFO]: Fixed mode — using env default hop ranges.")
     elapsed_time_s = 0.0
-    next_peak_height_update_s = PEAK_HEIGHT_UPDATE_INTERVAL_S
+    next_update_s = update_interval_s
     obs = env.get_observations()
     hop_command = env.unwrapped.command_manager.get_term("hop") if "hop" in env.unwrapped.command_manager.active_terms else None
     hop_count = 0
     # simulate environment
     while simulation_app.is_running():
-        # if peak_height_updates_enabled and elapsed_time_s >= next_peak_height_update_s:
-        #     peak_height_index = (peak_height_index + 1) % len(PEAK_HEIGHT_PLAY_RANGES)
-        #     _set_peak_height_range(env, PEAK_HEIGHT_PLAY_RANGES[peak_height_index])
-        #     obs = env.get_observations()
-        #     next_peak_height_update_s += PEAK_HEIGHT_UPDATE_INTERVAL_S
+        if cycle_updates_enabled and elapsed_time_s >= next_update_s:
+            cycle_index = (cycle_index + 1) % len(cycle_ranges)
+            cycle_setter(env, cycle_ranges[cycle_index])
+            obs = env.get_observations()
+            next_update_s += update_interval_s
 
         # run policy inference without putting mutable environment buffers into inference mode
         with torch.inference_mode():
@@ -146,7 +188,11 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             peak_h = float(hop_command.last_peak_height[0])
             peak_z = float(hop_command.last_peak_z[0])
             air_t = float(hop_command.last_air_time[0])
-            print(f"[HOP {hop_count:04d}] peak_height={peak_h:.3f} m (peak_z={peak_z:.3f} m), air_time={air_t:.3f} s")
+            stance_t = float(hop_command.last_stance_time[0])
+            print(
+                f"[HOP {hop_count:04d}] peak_height={peak_h:.3f} m (peak_z={peak_z:.3f} m), "
+                f"air_time={air_t:.3f} s, stance_time={stance_t:.3f} s"
+            )
 
     # close the simulator
     env.close()

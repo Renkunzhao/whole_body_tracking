@@ -122,20 +122,20 @@ class CommandsCfg:
         heading_control_stiffness=0.5,
         debug_vis=False,
         ranges=UniformVelocityCommandCfg.Ranges(
-            lin_vel_x=(-0.5, 0.5),
-            lin_vel_y=(-0.5, 0.5),
-            ang_vel_z=(-0.5, 0.5),
-            heading=(-math.pi, math.pi),
+            lin_vel_x=(0.0, 0.0),
+            lin_vel_y=(0.0, 0.0),
+            ang_vel_z=(0.0, 0.0),
+            heading=(0.0, 0.0),
         ),
     )
     hop = mdp.UniformHoppingCommandCfg(
         asset_cfg=SceneEntityCfg("robot"),
         sensor_cfg=SceneEntityCfg("contact_forces", body_names=list(GO2_FOOT_BODY_NAMES)),
         contact_threshold=5.0,
-        resampling_time_range=(1.0e9, 1.0e9),
+        resampling_time_range=(6, 12),
         ranges=mdp.UniformHoppingCommandCfg.Ranges(
-            peak_height=(0.6, 0.6),
-            stance_time=(0.5, 0.5),
+            peak_height=(0.1, 0.6),
+            stance_time=(0.1, 0.5),
         ),
     )
 
@@ -229,12 +229,12 @@ class RewardsCfg:
     # Pulse-on-landing reward that ties each commanded flight window to a
     # single continuous air phase; breaks the "two short hops per window"
     # local optimum that phase_contact alone admits when t_flight* is large.
-    air_time_tracking = RewTerm(
-        func=mdp.air_time_tracking,
-        weight=140.0,
+    track_air_time = RewTerm(
+        func=mdp.track_air_time,
+        weight=0.0,
         params={
             "command_name": "hop",
-            "std": 0.3,
+            "std": 0.15,
         },
     )
     # phase_contact = RewTerm(
@@ -317,6 +317,10 @@ class CurriculumCfg:
     Phase 3 (steps TRACK_ANG_VEL_START+): add angular velocity tracking.
     """
 
+    enable_track_air_time = CurrTerm(
+        func=modify_reward_weight,
+        params={"term_name": "track_air_time", "weight": 140, "num_steps": 500*24 },
+    )
     enable_joint_deviation = CurrTerm(
         func=modify_reward_weight,
         params={"term_name": "joint_deviation_phase_exp", "weight": 0.5, "num_steps": 1000*24 },

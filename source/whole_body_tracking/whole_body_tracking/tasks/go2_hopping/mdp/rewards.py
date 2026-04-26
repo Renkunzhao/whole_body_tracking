@@ -72,23 +72,48 @@ def phase_contact(
     return torch.where(in_stance, all_feet_contact, all_feet_air).float()
 
 
-def air_time_tracking(
-    env: ManagerBasedRLEnv,
-    command_name: str,
-    std: float,
-) -> torch.Tensor:
-    """Pulse reward on landing for matching the commanded single-hop flight time.
+class track_air_time(ManagerTermBase):
+    """At-most-one-pulse-per-cycle landing reward for matching commanded flight time.
 
-    Fires exactly one step per air->contact transition with value
-    ``exp(-((last_air_time - t_flight*) / std)^2)``. Because the pulse is tied
-    to a single continuous air phase, splitting one commanded flight window
-    into multiple short hops incurs a much larger squared error on each landing
-    than a single correctly-timed hop, breaking the double-hop local optimum
-    that ``phase_contact`` alone admits.
+    Each hop cycle (between two consecutive phase wraps of the hopping command)
+    can fire the landing pulse at most once. The pulse fires on the first
+    air->contact transition that lands during the commanded stance window
+    (``phase < stance_fraction``); subsequent mini-bounces in the same cycle
+    yield zero, blocking the ``farm pulses by jittering during stance'' exploit
+    that ``phase_contact`` alone cannot suppress. The pulse re-arms on phase
+    wrap (cycle boundary) and on env reset. Pulse value is
+    ``exp(-((last_air_time - t_flight*) / std)^2)``.
     """
-    cmd = env.command_manager.get_term(command_name)
-    err = cmd.last_air_time - cmd.flight_time_target
-    return cmd.just_landed.float() * torch.exp(-torch.square(err / std))
+
+    def __init__(self, cfg: RewardTermCfg, env: ManagerBasedRLEnv):
+        super().__init__(cfg, env)
+        n, dev = env.num_envs, env.device
+        self._armed = torch.ones(n, dtype=torch.bool, device=dev)
+        self._prev_phase = torch.zeros(n, device=dev)
+
+    def __call__(
+        self,
+        env: ManagerBasedRLEnv,
+        command_name: str,
+        std: float,
+    ) -> torch.Tensor:
+        cmd = env.command_manager.get_term(command_name)
+        phase = cmd.phase
+
+        # Re-arm at phase wrap (phase decreased → new cycle started). Also
+        # re-arms after env reset, since episode_length_buf resets and phase
+        # falls back to 0 from whatever stale prev_phase we held.
+        wrapped = phase < self._prev_phase
+        self._armed = self._armed | wrapped
+        self._prev_phase = phase.clone()
+
+        in_stance = phase < cmd.stance_fraction
+        fire = cmd.just_landed & in_stance & self._armed
+        # Disarm after firing — subsequent landings in the same cycle yield 0.
+        self._armed = self._armed & ~fire
+
+        err = cmd.last_air_time - cmd.flight_time_target
+        return fire.float() * torch.exp(-torch.square(err / std))
 
 
 def phase_contact_distance(
