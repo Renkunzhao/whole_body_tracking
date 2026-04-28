@@ -82,3 +82,20 @@ class Go2TrampolineWoStateEstimationEnvCfg(Go2TrampolineEnvCfg):
         super().__post_init__()
         self.observations.policy.motion_anchor_pos_b = None
         self.observations.policy.base_lin_vel = None
+
+@configclass
+class Go2TrampolineJumpWoStateEstimationEnvCfg(Go2TrampolineWoStateEstimationEnvCfg):
+    def __post_init__(self):
+        super().__post_init__()
+
+        self.terminations.anchor_pos.params['threshold'] = 0.5
+
+        # 1
+        self.rewards.motion_global_anchor_pos.weight = 2.0
+        self.rewards.motion_global_anchor_pos.params['std'] = 0.2
+        # 2
+        self.rewards.motion_body_lin_vel.weight = 2.0
+        self.rewards.motion_body_lin_vel.params['std'] = 0.7
+        # 3
+        self.rewards.motion_global_anchor_vel.weight = 1.0
+        self.rewards.motion_global_anchor_vel.params['std'] = 0.8

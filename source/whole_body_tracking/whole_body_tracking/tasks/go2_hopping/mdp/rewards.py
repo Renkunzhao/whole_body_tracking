@@ -13,6 +13,19 @@ if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
 
 
+def _feet_clearance_gate(
+    env: ManagerBasedRLEnv,
+    asset: Articulation,
+    foot_body_ids: list[int] | slice,
+    foot_clearance: float,
+    foot_clearance_softness: float,
+    surface_z: float,
+) -> torch.Tensor:
+    foot_z_local = asset.data.body_pos_w[:, foot_body_ids, 2] - env.scene.env_origins[:, 2:3]
+    min_foot_z = torch.min(foot_z_local, dim=1).values
+    return torch.sigmoid((min_foot_z - (surface_z + foot_clearance)) / foot_clearance_softness)
+
+
 class joint_deviation_phase_exp(ManagerTermBase):
     """Per-joint exponential posture reward with different std for stance and flight.
 
@@ -114,6 +127,103 @@ class track_air_time(ManagerTermBase):
 
         err = cmd.last_air_time - cmd.flight_time_target
         return fire.float() * torch.exp(-torch.square(err / std))
+
+
+class rebounce_height_tracking_exp(ManagerTermBase):
+    """One-step reward at the first rebound apex.
+
+    The target is not "jump higher forever"; it is "recover to the reset
+    height". The reward fires on the upward-to-non-upward velocity transition
+    after the robot has first descended and then rebounded, with value
+    ``exp(-((apex_z - drop_z) / std)^2)`` multiplied by a flat-orientation
+    gate and a foot-clearance gate, so standing/rearing up cannot satisfy the
+    height objective.
+    """
+
+    def __init__(self, cfg: RewardTermCfg, env: ManagerBasedRLEnv):
+        super().__init__(cfg, env)
+        self._prev_vz = torch.zeros(env.num_envs, device=env.device)
+        asset_cfg: SceneEntityCfg = cfg.params.get("asset_cfg", SceneEntityCfg("robot"))
+        self._asset_name = asset_cfg.name
+        foot_asset_cfg: SceneEntityCfg = cfg.params["foot_asset_cfg"]
+        self._foot_asset_name = foot_asset_cfg.name
+        self._foot_body_ids = foot_asset_cfg.body_ids
+
+    def __call__(
+        self,
+        env: ManagerBasedRLEnv,
+        command_name: str,
+        std: float,
+        orientation_std: float,
+        foot_asset_cfg: SceneEntityCfg,
+        foot_clearance: float,
+        foot_clearance_softness: float,
+        surface_z: float = 0.0,
+        vz_threshold: float = 0.0,
+        asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+    ) -> torch.Tensor:
+        del asset_cfg, foot_asset_cfg  # resolved in __init__
+        robot: Articulation = env.scene[self._asset_name]
+        vz = robot.data.root_lin_vel_w[:, 2]
+        cmd = env.command_manager.get_term(command_name)
+
+        apex = cmd.has_descended & cmd.has_rebounded & (self._prev_vz > vz_threshold) & (vz <= vz_threshold)
+        self._prev_vz = vz.clone()
+
+        orientation_error = torch.sum(torch.square(robot.data.projected_gravity_b[:, :2]), dim=1)
+        orientation_reward = torch.exp(-orientation_error / (orientation_std * orientation_std))
+        foot_asset: Articulation = env.scene[self._foot_asset_name]
+        foot_reward = _feet_clearance_gate(
+            env, foot_asset, self._foot_body_ids, foot_clearance, foot_clearance_softness, surface_z
+        )
+        height_error = torch.abs(robot.data.root_pos_w[:, 2] - cmd.drop_z)
+        return apex.float() * torch.exp(-torch.square(height_error / std)) * orientation_reward * foot_reward
+
+    def reset(self, env_ids=None):
+        if env_ids is None:
+            self._prev_vz.zero_()
+        else:
+            self._prev_vz[env_ids] = 0.0
+
+
+def rebounce_height_progress_exp(
+    env: ManagerBasedRLEnv,
+    command_name: str,
+    std: float,
+    orientation_std: float,
+    foot_asset_cfg: SceneEntityCfg,
+    foot_clearance: float,
+    foot_clearance_softness: float,
+    surface_z: float = 0.0,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> torch.Tensor:
+    """Dense shaping during rebound ascent toward the reset height while flat and airborne."""
+    cmd = env.command_manager.get_term(command_name)
+    asset: Articulation = env.scene[asset_cfg.name]
+    orientation_error = torch.sum(torch.square(asset.data.projected_gravity_b[:, :2]), dim=1)
+    orientation_reward = torch.exp(-orientation_error / (orientation_std * orientation_std))
+    foot_asset: Articulation = env.scene[foot_asset_cfg.name]
+    foot_reward = _feet_clearance_gate(
+        env, foot_asset, foot_asset_cfg.body_ids, foot_clearance, foot_clearance_softness, surface_z
+    )
+    height_error = torch.abs(asset.data.root_pos_w[:, 2] - cmd.drop_z)
+    return cmd.has_rebounded.float() * torch.exp(-torch.square(height_error / std)) * orientation_reward * foot_reward
+
+
+class termination_term(ManagerTermBase):
+    """Reward/penalty pulse for selected termination terms, including timeouts."""
+
+    def __init__(self, cfg: RewardTermCfg, env: ManagerBasedRLEnv):
+        super().__init__(cfg, env)
+        term_keys = cfg.params.get("term_keys", ".*")
+        self._term_names = env.termination_manager.find_terms(term_keys)
+
+    def __call__(self, env: ManagerBasedRLEnv, term_keys: str | list[str] = ".*") -> torch.Tensor:
+        del term_keys
+        value = torch.zeros(env.num_envs, device=env.device)
+        for term_name in self._term_names:
+            value += env.termination_manager.get_term(term_name).float()
+        return value
 
 
 def phase_contact_distance(

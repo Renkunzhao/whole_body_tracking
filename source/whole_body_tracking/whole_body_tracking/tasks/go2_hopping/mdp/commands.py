@@ -236,3 +236,128 @@ class UniformHoppingCommandCfg(CommandTermCfg):
         stance_time: tuple[float, float] = MISSING
 
     ranges: Ranges = MISSING
+
+
+class UniformRebounceCommand(CommandTerm):
+    """Per-env scalar ``peak_height`` target for the single-bounce rebounce task.
+
+    On each env reset, samples ``h_cmd ~ U(ranges.peak_height)`` and latches
+    ``drop_z = base_z`` after the reset event teleports the robot to its drop
+    height. Tracks the running max of ``base_z`` during the rebound ascent so
+    terminal rewards / terminations can compare the first rebound apex against
+    the initial drop height.
+
+    Unlike :class:`UniformHoppingCommand`, this class does **not** depend on
+    the contact sensor: single-bounce semantics (drop → contact → bounce →
+    apex → end) are encoded by base-state running max here, with apex
+    detection living in a separate termination term.
+    """
+
+    cfg: UniformRebounceCommandCfg
+
+    def __init__(self, cfg: UniformRebounceCommandCfg, env: ManagerBasedRLEnv):
+        super().__init__(cfg, env)
+        self.robot: Articulation = env.scene[cfg.asset_cfg.name]
+        n, dev = self.num_envs, self.device
+        self._peak_h_target = torch.zeros(n, device=dev)
+        # ``peak_z`` is the max of base_z taken **only during the rebound
+        # ascent** — i.e. timesteps where the robot has already descended
+        # (vz < 0 at some prior step) and is now moving upward (vz > 0). This
+        # excludes the initial drop_z so a weak bounce that fails to recover
+        # the drop height is correctly reported as ``realized_peak_height < 0``.
+        self._peak_z = torch.zeros(n, device=dev)
+        self._drop_z = torch.zeros(n, device=dev)
+        self._has_descended = torch.zeros(n, dtype=torch.bool, device=dev)
+        self._has_rebounded = torch.zeros(n, dtype=torch.bool, device=dev)
+        self.metrics["error_peak_height"] = torch.zeros(n, device=dev)
+
+    @property
+    def command(self) -> torch.Tensor:
+        return self._peak_h_target.unsqueeze(-1)
+
+    @property
+    def peak_height(self) -> torch.Tensor:
+        return self._peak_h_target
+
+    @property
+    def peak_z(self) -> torch.Tensor:
+        return self._peak_z
+
+    @property
+    def drop_z(self) -> torch.Tensor:
+        return self._drop_z
+
+    @property
+    def realized_peak_height(self) -> torch.Tensor:
+        return self._peak_z - self._drop_z
+
+    @property
+    def rebound_height_error(self) -> torch.Tensor:
+        return torch.abs(self._peak_z - self._drop_z)
+
+    @property
+    def has_descended(self) -> torch.Tensor:
+        return self._has_descended
+
+    @property
+    def has_rebounded(self) -> torch.Tensor:
+        return self._has_rebounded
+
+    def _update_metrics(self):
+        z = self.robot.data.root_pos_w[:, 2]
+        vz = self.robot.data.root_lin_vel_w[:, 2]
+        # Latch ``has_descended`` once the robot has been clearly falling. From
+        # then on, ``vz > 0`` means we are in the rebound ascent (or post-
+        # liftoff ballistic phase) — the only window that should contribute to
+        # the rebound apex.
+        self._has_descended = self._has_descended | (vz < 0)
+        ascending_after_descent = self._has_descended & (vz > 0)
+        self._has_rebounded = self._has_rebounded | ascending_after_descent
+        self._peak_z = torch.where(
+            ascending_after_descent,
+            torch.maximum(self._peak_z, z),
+            self._peak_z,
+        )
+        # A perfect rebound returns the base to its initial reset height, so
+        # the tracking error is the absolute distance between the first rebound
+        # apex and the latched drop height.
+        self.metrics["error_peak_height"][:] = self.rebound_height_error
+
+    def _resample_command(self, env_ids: Sequence[int]):
+        # h_cmd is sampled and written by the ``reset_drop_from_height`` event,
+        # which runs before ``command_manager.reset()`` and is responsible for
+        # both the drop pose and the per-env target. This keeps the two values
+        # aligned without requiring a chicken-and-egg ordering hack.
+        del env_ids
+
+    def _update_command(self):
+        pass
+
+    def reset(self, env_ids: Sequence[int] | None = None) -> dict[str, float]:
+        extras = super().reset(env_ids)
+        z = self.robot.data.root_pos_w[:, 2]
+        if env_ids is None:
+            self._drop_z.copy_(z)
+            self._peak_z.zero_()
+            self._has_descended.zero_()
+            self._has_rebounded.zero_()
+        else:
+            self._drop_z[env_ids] = z[env_ids]
+            self._peak_z[env_ids] = 0.0
+            self._has_descended[env_ids] = False
+            self._has_rebounded[env_ids] = False
+        return extras
+
+
+@configclass
+class UniformRebounceCommandCfg(CommandTermCfg):
+    """Config for :class:`UniformRebounceCommand`."""
+
+    class_type: type = UniformRebounceCommand
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
+
+    @configclass
+    class Ranges:
+        peak_height: tuple[float, float] = MISSING
+
+    ranges: Ranges = MISSING
