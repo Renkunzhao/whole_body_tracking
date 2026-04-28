@@ -115,9 +115,13 @@ class CommandsCfg:
 
     hop = mdp.UniformRebounceCommandCfg(
         asset_cfg=SceneEntityCfg("robot"),
-        # Episode is short (~1.5s, drop → bounce → apex → done) and resample
-        # only needs to fire on env reset. A very large range disables any
-        # mid-episode resampling so the per-env target is stable end-to-end.
+        foot_asset_cfg=SceneEntityCfg("robot", body_names=list(GO2_FOOT_BODY_NAMES)),
+        foot_clearance=0.08,
+        surface_z=0.0,
+        apex_height_tolerance=0.25,
+        # Resample only on env reset. A very large range disables mid-episode
+        # resampling so the same height target is used across all bounces in
+        # one rollout.
         resampling_time_range=(1.0e9, 1.0e9),
         ranges=mdp.UniformRebounceCommandCfg.Ranges(
             peak_height=(0.5, 0.8),
@@ -186,7 +190,7 @@ class EventCfg:
         },
     )
 
-    # reset — single-bounce: teleport robot to (env_origin_x, env_origin_y,
+    # reset — rebounce: teleport robot to (env_origin_x, env_origin_y,
     # drop_z_offset + h_cmd) with zero velocity and default joint pose, and
     # write the sampled h_cmd into the rebounce command's per-env target.
     reset_drop = EventTerm(
@@ -207,12 +211,15 @@ class RewardsCfg:
     failed_termination = RewTerm(
         func=mdp.is_terminated_term,
         weight=-250.0,
-        params={"term_keys": ["base_orientation", "non_foot_contact"]},
+        params={"term_keys": ["base_orientation", "non_foot_contact", "no_airborne_apex_timeout"]},
     )
     failed_timeout = RewTerm(
-        func=mdp.termination_term,
+        func=mdp.insufficient_apex_timeout,
         weight=-250.0,
-        params={"term_keys": ["time_out"]},
+        params={
+            "command_name": "hop",
+            "min_apex_count": 1.0,
+        },
     )
     rebound_progress = RewTerm(
         func=mdp.rebounce_height_progress_exp,
@@ -267,16 +274,15 @@ class TerminationsCfg:
             "threshold": 1.0,
         },
     )
-    # Real task terminus: robot has descended and is no longer ascending. Not
-    # a time-out, so the value bootstrapped by GAE is the true terminal value.
-    apex = DoneTerm(
-        func=mdp.apex_reached,
+    no_airborne_apex_timeout = DoneTerm(
+        func=mdp.no_airborne_apex_timeout,
         params={
-            "command_name": "hop",
-            "vz_threshold": 0.0,
+            "asset_cfg": SceneEntityCfg("robot"),
             "foot_asset_cfg": SceneEntityCfg("robot", body_names=list(GO2_FOOT_BODY_NAMES)),
+            "timeout": 2.0,
             "foot_clearance": 0.08,
             "surface_z": 0.0,
+            "vz_threshold": 0.0,
         },
     )
     time_out = DoneTerm(func=mdp.time_out, time_out=True)
@@ -322,7 +328,7 @@ class Go2RebounceEnvCfg(ManagerBasedRLEnvCfg):
         """Post initialization."""
         # general settings
         self.decimation = 4
-        self.episode_length_s = 1.5
+        self.episode_length_s = 4.0
         # simulation settings
         self.sim.dt = 0.005
         self.sim.render_interval = self.decimation

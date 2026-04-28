@@ -239,18 +239,16 @@ class UniformHoppingCommandCfg(CommandTermCfg):
 
 
 class UniformRebounceCommand(CommandTerm):
-    """Per-env scalar ``peak_height`` target for the single-bounce rebounce task.
+    """Per-env scalar ``peak_height`` target for the rebounce task.
 
     On each env reset, samples ``h_cmd ~ U(ranges.peak_height)`` and latches
     ``drop_z = base_z`` after the reset event teleports the robot to its drop
-    height. Tracks the running max of ``base_z`` during the rebound ascent so
-    terminal rewards / terminations can compare the first rebound apex against
-    the initial drop height.
+    height. Tracks periodic drop/rebound/apex state so rewards can fire once
+    per airborne apex while the episode continues.
 
     Unlike :class:`UniformHoppingCommand`, this class does **not** depend on
-    the contact sensor: single-bounce semantics (drop → contact → bounce →
-    apex → end) are encoded by base-state running max here, with apex
-    detection living in a separate termination term.
+    the contact sensor: rebounce semantics are encoded by root vertical
+    velocity and base-state running max.
     """
 
     cfg: UniformRebounceCommandCfg
@@ -258,6 +256,12 @@ class UniformRebounceCommand(CommandTerm):
     def __init__(self, cfg: UniformRebounceCommandCfg, env: ManagerBasedRLEnv):
         super().__init__(cfg, env)
         self.robot: Articulation = env.scene[cfg.asset_cfg.name]
+        self._foot_asset = None
+        self._foot_body_ids = None
+        if cfg.foot_asset_cfg is not None:
+            cfg.foot_asset_cfg.resolve(env.scene)
+            self._foot_asset: Articulation = env.scene[cfg.foot_asset_cfg.name]
+            self._foot_body_ids = cfg.foot_asset_cfg.body_ids
         n, dev = self.num_envs, self.device
         self._peak_h_target = torch.zeros(n, device=dev)
         # ``peak_z`` is the max of base_z taken **only during the rebound
@@ -269,7 +273,13 @@ class UniformRebounceCommand(CommandTerm):
         self._drop_z = torch.zeros(n, device=dev)
         self._has_descended = torch.zeros(n, dtype=torch.bool, device=dev)
         self._has_rebounded = torch.zeros(n, dtype=torch.bool, device=dev)
+        self._just_apex = torch.zeros(n, dtype=torch.bool, device=dev)
+        self._prev_vz = torch.zeros(n, device=dev)
+        self._apex_count = torch.zeros(n, device=dev)
+        self._target_apex_count = torch.zeros(n, device=dev)
         self.metrics["error_peak_height"] = torch.zeros(n, device=dev)
+        self.metrics["apex_count"] = torch.zeros(n, device=dev)
+        self.metrics["target_apex_count"] = torch.zeros(n, device=dev)
 
     @property
     def command(self) -> torch.Tensor:
@@ -303,14 +313,39 @@ class UniformRebounceCommand(CommandTerm):
     def has_rebounded(self) -> torch.Tensor:
         return self._has_rebounded
 
+    @property
+    def just_apex(self) -> torch.Tensor:
+        return self._just_apex
+
+    @property
+    def apex_count(self) -> torch.Tensor:
+        return self._apex_count
+
+    @property
+    def target_apex_count(self) -> torch.Tensor:
+        return self._target_apex_count
+
+    def _airborne_apex(self, apex: torch.Tensor) -> torch.Tensor:
+        if self._foot_asset is None or self._foot_body_ids is None:
+            return apex
+        foot_z_local = self._foot_asset.data.body_pos_w[:, self._foot_body_ids, 2] - self._env.scene.env_origins[:, 2:3]
+        min_foot_z = torch.min(foot_z_local, dim=1).values
+        return apex & (min_foot_z > self.cfg.surface_z + self.cfg.foot_clearance)
+
+    def _target_apex(self, airborne_apex: torch.Tensor, z: torch.Tensor) -> torch.Tensor:
+        height_ok = torch.abs(z - self._drop_z) < self.cfg.apex_height_tolerance
+        return airborne_apex & height_ok
+
     def _update_metrics(self):
         z = self.robot.data.root_pos_w[:, 2]
         vz = self.robot.data.root_lin_vel_w[:, 2]
-        # Latch ``has_descended`` once the robot has been clearly falling. From
-        # then on, ``vz > 0`` means we are in the rebound ascent (or post-
-        # liftoff ballistic phase) — the only window that should contribute to
-        # the rebound apex.
-        self._has_descended = self._has_descended | (vz < 0)
+        # Periodic state machine:
+        # descending -> rebound ascent -> apex pulse -> re-arm for next fall.
+        apex = self._has_descended & self._has_rebounded & (self._prev_vz > 0.0) & (vz <= 0.0)
+        airborne_apex = self._airborne_apex(apex)
+        target_apex = self._target_apex(airborne_apex, z)
+        self._just_apex = airborne_apex
+
         ascending_after_descent = self._has_descended & (vz > 0)
         self._has_rebounded = self._has_rebounded | ascending_after_descent
         self._peak_z = torch.where(
@@ -318,10 +353,26 @@ class UniformRebounceCommand(CommandTerm):
             torch.maximum(self._peak_z, z),
             self._peak_z,
         )
-        # A perfect rebound returns the base to its initial reset height, so
-        # the tracking error is the absolute distance between the first rebound
-        # apex and the latched drop height.
-        self.metrics["error_peak_height"][:] = self.rebound_height_error
+        apex_error = torch.abs(z - self._drop_z)
+        new_apex_count = torch.where(airborne_apex, self._apex_count + 1.0, self._apex_count)
+        self.metrics["error_peak_height"] = torch.where(
+            airborne_apex,
+            self.metrics["error_peak_height"]
+            + (apex_error - self.metrics["error_peak_height"]) / new_apex_count.clamp_min(1.0),
+            self.metrics["error_peak_height"],
+        )
+        self._apex_count = new_apex_count
+        self._target_apex_count = torch.where(target_apex, self._target_apex_count + 1.0, self._target_apex_count)
+        self.metrics["apex_count"][:] = self._apex_count
+        self.metrics["target_apex_count"][:] = self._target_apex_count
+
+        self._has_descended = self._has_descended | (vz < 0)
+        # After a completed apex, clear rebound state so the next reward pulse
+        # requires a fresh descent and fresh rebound ascent.
+        self._has_descended = torch.where(apex, vz < 0, self._has_descended)
+        self._has_rebounded = torch.where(apex, torch.zeros_like(self._has_rebounded), self._has_rebounded)
+        self._peak_z = torch.where(apex, torch.zeros_like(self._peak_z), self._peak_z)
+        self._prev_vz = vz.clone()
 
     def _resample_command(self, env_ids: Sequence[int]):
         # h_cmd is sampled and written by the ``reset_drop_from_height`` event,
@@ -341,11 +392,19 @@ class UniformRebounceCommand(CommandTerm):
             self._peak_z.zero_()
             self._has_descended.zero_()
             self._has_rebounded.zero_()
+            self._just_apex.zero_()
+            self._prev_vz.zero_()
+            self._apex_count.zero_()
+            self._target_apex_count.zero_()
         else:
             self._drop_z[env_ids] = z[env_ids]
             self._peak_z[env_ids] = 0.0
             self._has_descended[env_ids] = False
             self._has_rebounded[env_ids] = False
+            self._just_apex[env_ids] = False
+            self._prev_vz[env_ids] = 0.0
+            self._apex_count[env_ids] = 0.0
+            self._target_apex_count[env_ids] = 0.0
         return extras
 
 
@@ -355,6 +414,10 @@ class UniformRebounceCommandCfg(CommandTermCfg):
 
     class_type: type = UniformRebounceCommand
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
+    foot_asset_cfg: SceneEntityCfg | None = None
+    foot_clearance: float = 0.0
+    surface_z: float = 0.0
+    apex_height_tolerance: float = 0.25
 
     @configclass
     class Ranges:

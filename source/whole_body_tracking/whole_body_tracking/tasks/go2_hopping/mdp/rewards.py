@@ -130,7 +130,7 @@ class track_air_time(ManagerTermBase):
 
 
 class rebounce_height_tracking_exp(ManagerTermBase):
-    """One-step reward at the first rebound apex.
+    """One-step reward at each rebound apex.
 
     The target is not "jump higher forever"; it is "recover to the reset
     height". The reward fires on the upward-to-non-upward velocity transition
@@ -224,6 +224,19 @@ class termination_term(ManagerTermBase):
         for term_name in self._term_names:
             value += env.termination_manager.get_term(term_name).float()
         return value
+
+
+def insufficient_apex_timeout(
+    env: ManagerBasedRLEnv,
+    command_name: str,
+    min_apex_count: float,
+    term_name: str = "time_out",
+) -> torch.Tensor:
+    """Penalize timeout only when too few airborne apex events occurred."""
+    cmd = env.command_manager.get_term(command_name)
+    timed_out = env.termination_manager.get_term(term_name).float()
+    insufficient = (cmd.apex_count < min_apex_count).float()
+    return timed_out * insufficient
 
 
 def phase_contact_distance(
