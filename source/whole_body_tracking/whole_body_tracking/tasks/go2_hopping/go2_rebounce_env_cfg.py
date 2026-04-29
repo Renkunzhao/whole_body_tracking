@@ -203,7 +203,7 @@ class EventCfg:
         params={
             "command_name": "hop",
             "asset_cfg": SceneEntityCfg("robot"),
-            "drop_z_offset": 0.0,
+            "drop_height_offset": 0.0,
             "drop_height_range": REBOUNCE_HEIGHT_RANGE,
         },
     )
@@ -216,28 +216,7 @@ class RewardsCfg:
     failed_termination = RewTerm(
         func=mdp.is_terminated_term,
         weight=-250.0,
-        params={"term_keys": ["base_orientation", "non_foot_contact", "no_airborne_apex_timeout"]},
-    )
-    failed_timeout = RewTerm(
-        func=mdp.insufficient_apex_timeout,
-        weight=-250.0,
-        params={
-            "command_name": "hop",
-            "min_apex_count": 1.0,
-        },
-    )
-    rebound_progress = RewTerm(
-        func=mdp.rebounce_height_progress_exp,
-        weight=5.0,
-        params={
-            "command_name": "hop",
-            "std": 0.25,
-            "orientation_std": 0.35,
-            "foot_asset_cfg": SceneEntityCfg("robot", body_names=list(GO2_FOOT_BODY_NAMES)),
-            "foot_clearance": 0.08,
-            "foot_clearance_softness": 0.015,
-            "surface_z": 0.0,
-        },
+        params={"term_keys": ["base_orientation", "non_foot_contact", "no_valid_apex_timeout"]},
     )
     rebounce_height = RewTerm(
         func=mdp.rebounce_height_tracking_exp,
@@ -250,7 +229,6 @@ class RewardsCfg:
             "foot_clearance": 0.08,
             "foot_clearance_softness": 0.015,
             "surface_z": 0.0,
-            "vz_threshold": 0.0,
         },
     )
     flat_orientation = RewTerm(func=mdp.flat_orientation_l2, weight=-2.0)
@@ -288,15 +266,11 @@ class TerminationsCfg:
             "threshold": 1.0,
         },
     )
-    no_airborne_apex_timeout = DoneTerm(
-        func=mdp.no_airborne_apex_timeout,
+    no_valid_apex_timeout = DoneTerm(
+        func=mdp.no_valid_apex_timeout,
         params={
-            "asset_cfg": SceneEntityCfg("robot"),
-            "foot_asset_cfg": SceneEntityCfg("robot", body_names=list(GO2_FOOT_BODY_NAMES)),
+            "command_name": "hop",
             "timeout": 2.0,
-            "foot_clearance": 0.08,
-            "surface_z": 0.0,
-            "vz_threshold": 0.0,
         },
     )
     time_out = DoneTerm(func=mdp.time_out, time_out=True)

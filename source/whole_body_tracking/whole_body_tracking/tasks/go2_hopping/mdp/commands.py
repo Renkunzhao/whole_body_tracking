@@ -242,13 +242,13 @@ class UniformRebounceCommand(CommandTerm):
     """Per-env scalar ``peak_height`` target for the rebounce task.
 
     On each env reset, samples ``h_cmd ~ U(ranges.peak_height)`` and latches
-    ``drop_z = base_z`` after the reset event teleports the robot to its
+    ``drop_height = base_height`` after the reset event teleports the robot to its
     independently sampled drop height. Tracks periodic drop/rebound/apex state
-    so rewards can fire once per airborne apex while the episode continues.
+    so rewards can fire once per valid apex while the episode continues.
 
     Unlike :class:`UniformHoppingCommand`, this class does **not** depend on
     the contact sensor: rebounce semantics are encoded by root vertical
-    velocity and base-state running max.
+    velocity and geometric foot clearance.
     """
 
     cfg: UniformRebounceCommandCfg
@@ -263,74 +263,44 @@ class UniformRebounceCommand(CommandTerm):
             self._foot_asset: Articulation = env.scene[cfg.foot_asset_cfg.name]
             self._foot_body_ids = cfg.foot_asset_cfg.body_ids
         n, dev = self.num_envs, self.device
-        self._peak_h_target = torch.zeros(n, device=dev)
-        # ``peak_z`` is the max of base_z taken **only during the rebound
-        # ascent** — i.e. timesteps where the robot has already descended
-        # (vz < 0 at some prior step) and is now moving upward (vz > 0). This
-        # excludes the initial drop_z so a weak bounce that fails to recover
-        # toward the target height is not hidden by the reset state.
-        self._peak_z = torch.zeros(n, device=dev)
-        self._drop_z = torch.zeros(n, device=dev)
-        self._has_descended = torch.zeros(n, dtype=torch.bool, device=dev)
-        self._has_rebounded = torch.zeros(n, dtype=torch.bool, device=dev)
-        self._just_apex = torch.zeros(n, dtype=torch.bool, device=dev)
+        self._target_apex_height = torch.zeros(n, device=dev)
+        self._drop_height = torch.zeros(n, device=dev)
+        self._is_apex = torch.zeros(n, dtype=torch.bool, device=dev)
+        self._last_apex_height = torch.zeros(n, device=dev)
+        self._last_apex_target_height = torch.zeros(n, device=dev)
         self._apex_armed = torch.ones(n, dtype=torch.bool, device=dev)
         self._prev_vz = torch.zeros(n, device=dev)
         self._apex_count = torch.zeros(n, device=dev)
-        self._target_apex_count = torch.zeros(n, device=dev)
+        self._height_matched_apex_count = torch.zeros(n, device=dev)
         self.metrics["error_peak_height"] = torch.zeros(n, device=dev)
         self.metrics["apex_count"] = torch.zeros(n, device=dev)
-        self.metrics["target_apex_count"] = torch.zeros(n, device=dev)
+        self.metrics["height_matched_apex_count"] = torch.zeros(n, device=dev)
 
     @property
     def command(self) -> torch.Tensor:
-        return self._peak_h_target.unsqueeze(-1)
+        return self._target_apex_height.unsqueeze(-1)
 
     @property
-    def peak_height(self) -> torch.Tensor:
-        return self._peak_h_target
+    def drop_height(self) -> torch.Tensor:
+        return self._drop_height
 
     @property
-    def peak_z(self) -> torch.Tensor:
-        return self._peak_z
+    def target_apex_height(self) -> torch.Tensor:
+        return self._target_apex_height
 
     @property
-    def drop_z(self) -> torch.Tensor:
-        return self._drop_z
+    def is_apex(self) -> torch.Tensor:
+        return self._is_apex
 
     @property
-    def target_z(self) -> torch.Tensor:
-        return self._env.scene.env_origins[:, 2] + self._peak_h_target
+    def last_apex_height(self) -> torch.Tensor:
+        return self._last_apex_height
 
     @property
-    def realized_peak_height(self) -> torch.Tensor:
-        return self._peak_z - self._env.scene.env_origins[:, 2]
+    def last_apex_target_height(self) -> torch.Tensor:
+        return self._last_apex_target_height
 
-    @property
-    def rebound_height_error(self) -> torch.Tensor:
-        return torch.abs(self._peak_z - self.target_z)
-
-    @property
-    def has_descended(self) -> torch.Tensor:
-        return self._has_descended
-
-    @property
-    def has_rebounded(self) -> torch.Tensor:
-        return self._has_rebounded
-
-    @property
-    def just_apex(self) -> torch.Tensor:
-        return self._just_apex
-
-    @property
-    def apex_count(self) -> torch.Tensor:
-        return self._apex_count
-
-    @property
-    def target_apex_count(self) -> torch.Tensor:
-        return self._target_apex_count
-
-    def _foot_airborne_and_near(self) -> tuple[torch.Tensor, torch.Tensor]:
+    def _feet_clearance_flags(self) -> tuple[torch.Tensor, torch.Tensor]:
         ones = torch.ones(self.num_envs, dtype=torch.bool, device=self.device)
         if self._foot_asset is None or self._foot_body_ids is None:
             return ones, ones
@@ -339,49 +309,43 @@ class UniformRebounceCommand(CommandTerm):
         threshold = self.cfg.surface_z + self.cfg.foot_clearance
         return min_foot_z > threshold, min_foot_z <= threshold
 
-    def _target_apex(self, airborne_apex: torch.Tensor, z: torch.Tensor) -> torch.Tensor:
-        height_ok = torch.abs(z - self.target_z) < self.cfg.apex_height_tolerance
-        return airborne_apex & height_ok
+    def _height_matched_apex(self, is_apex: torch.Tensor, height: torch.Tensor) -> torch.Tensor:
+        height_ok = torch.abs(height - self.target_apex_height) < self.cfg.apex_height_tolerance
+        return is_apex & height_ok
 
     def _update_metrics(self):
-        z = self.robot.data.root_pos_w[:, 2]
+        height = self.robot.data.root_pos_w[:, 2]
         vz = self.robot.data.root_lin_vel_w[:, 2]
-        # Periodic state machine:
-        # descending -> rebound ascent -> apex pulse -> re-arm for next fall.
-        foot_airborne, foot_near = self._foot_airborne_and_near()
-        self._apex_armed = self._apex_armed | foot_near
-        apex = self._has_descended & self._has_rebounded & (self._prev_vz > 0.0) & (vz <= 0.0)
-        airborne_apex = self._apex_armed & apex & foot_airborne
-        target_apex = self._target_apex(airborne_apex, z)
-        self._just_apex = airborne_apex
-
-        ascending_after_descent = self._has_descended & (vz > 0)
-        self._has_rebounded = self._has_rebounded | ascending_after_descent
-        self._peak_z = torch.where(
-            ascending_after_descent,
-            torch.maximum(self._peak_z, z),
-            self._peak_z,
+        # Periodic event detector:
+        # feet return below clearance -> arm -> upward-to-non-upward velocity
+        # crossing with feet above clearance -> valid apex pulse -> disarm.
+        feet_above_clearance, feet_below_clearance = self._feet_clearance_flags()
+        self._apex_armed = self._apex_armed | feet_below_clearance
+        is_apex = self._apex_armed & (self._prev_vz > 0.0) & (vz <= 0.0) & feet_above_clearance
+        height_matched_apex = self._height_matched_apex(is_apex, height)
+        self._is_apex = is_apex
+        self._last_apex_height = torch.where(is_apex, height, self._last_apex_height)
+        self._last_apex_target_height = torch.where(
+            is_apex, self.target_apex_height, self._last_apex_target_height
         )
-        apex_error = torch.abs(z - self.target_z)
-        new_apex_count = torch.where(airborne_apex, self._apex_count + 1.0, self._apex_count)
+
+        apex_error = torch.abs(self._last_apex_height - self._last_apex_target_height)
+        new_apex_count = torch.where(is_apex, self._apex_count + 1.0, self._apex_count)
         self.metrics["error_peak_height"] = torch.where(
-            airborne_apex,
+            is_apex,
             self.metrics["error_peak_height"]
             + (apex_error - self.metrics["error_peak_height"]) / new_apex_count.clamp_min(1.0),
             self.metrics["error_peak_height"],
         )
         self._apex_count = new_apex_count
-        self._target_apex_count = torch.where(target_apex, self._target_apex_count + 1.0, self._target_apex_count)
+        self._height_matched_apex_count = torch.where(
+            height_matched_apex,
+            self._height_matched_apex_count + 1.0,
+            self._height_matched_apex_count,
+        )
         self.metrics["apex_count"][:] = self._apex_count
-        self.metrics["target_apex_count"][:] = self._target_apex_count
-        self._apex_armed = self._apex_armed & ~airborne_apex
-
-        self._has_descended = self._has_descended | (vz < 0)
-        # After a completed apex, clear rebound state so the next reward pulse
-        # requires a fresh descent and fresh rebound ascent.
-        self._has_descended = torch.where(apex, vz < 0, self._has_descended)
-        self._has_rebounded = torch.where(apex, torch.zeros_like(self._has_rebounded), self._has_rebounded)
-        self._peak_z = torch.where(apex, torch.zeros_like(self._peak_z), self._peak_z)
+        self.metrics["height_matched_apex_count"][:] = self._height_matched_apex_count
+        self._apex_armed = self._apex_armed & ~is_apex
         self._prev_vz = vz.clone()
 
     def _resample_command(self, env_ids: Sequence[int]):
@@ -401,7 +365,7 @@ class UniformRebounceCommand(CommandTerm):
             return
 
         r = self.cfg.ranges
-        self._peak_h_target[resample_ids] = torch.empty(len(resample_ids), device=self.device).uniform_(
+        self._target_apex_height[resample_ids] = torch.empty(len(resample_ids), device=self.device).uniform_(
             *r.peak_height
         )
 
@@ -410,27 +374,25 @@ class UniformRebounceCommand(CommandTerm):
 
     def reset(self, env_ids: Sequence[int] | None = None) -> dict[str, float]:
         extras = super().reset(env_ids)
-        z = self.robot.data.root_pos_w[:, 2]
+        height = self.robot.data.root_pos_w[:, 2]
         if env_ids is None:
-            self._drop_z.copy_(z)
-            self._peak_z.zero_()
-            self._has_descended.zero_()
-            self._has_rebounded.zero_()
-            self._just_apex.zero_()
+            self._drop_height.copy_(height)
+            self._is_apex.zero_()
+            self._last_apex_height.zero_()
+            self._last_apex_target_height.zero_()
             self._apex_armed.fill_(True)
             self._prev_vz.zero_()
             self._apex_count.zero_()
-            self._target_apex_count.zero_()
+            self._height_matched_apex_count.zero_()
         else:
-            self._drop_z[env_ids] = z[env_ids]
-            self._peak_z[env_ids] = 0.0
-            self._has_descended[env_ids] = False
-            self._has_rebounded[env_ids] = False
-            self._just_apex[env_ids] = False
+            self._drop_height[env_ids] = height[env_ids]
+            self._is_apex[env_ids] = False
+            self._last_apex_height[env_ids] = 0.0
+            self._last_apex_target_height[env_ids] = 0.0
             self._apex_armed[env_ids] = True
             self._prev_vz[env_ids] = 0.0
             self._apex_count[env_ids] = 0.0
-            self._target_apex_count[env_ids] = 0.0
+            self._height_matched_apex_count[env_ids] = 0.0
         return extras
 
 

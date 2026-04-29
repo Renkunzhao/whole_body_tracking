@@ -32,7 +32,7 @@ termination condition. The episode continues until either a failure condition is
 met or the $20$ s time limit is reached. A successful rollout should therefore
 show repeated cycles of
 \begin{center}
-    fall,\quad support interaction,\quad rebound,\quad airborne apex,\quad
+    fall,\quad support interaction,\quad rebound,\quad valid apex,\quad
     re-arm after the feet return near the support.
 \end{center}
 
@@ -91,19 +91,19 @@ to
 \begin{equation}
     \bm{p}_{\mathrm{root}} =
     \bm{o}_{\mathrm{env}} +
-    \left[p_x^0,\ p_y^0,\ h_{\mathrm{drop}}+z_{\mathrm{offset}}\right],
+    \left[p_x^0,\ p_y^0,\ h_{\mathrm{drop}}+h_{\mathrm{offset}}\right],
     \qquad
     \bm{v}_{\mathrm{root}}=\bm{0},
 \end{equation}
-where $z_{\mathrm{offset}}=0$ in the current config. Joint positions are reset to
+where $h_{\mathrm{offset}}=0$ in the current config. Joint positions are reset to
 the default Go2 pose and joint velocities are reset to zero.
 
 During the rollout, the target command is resampled after
 \begin{equation}
     t_{\mathrm{resample}} \sim \mathcal{U}(10,20)\ \mathrm{s}.
 \end{equation}
-This changes only $h^{*}$ and therefore $z^{*}$; it does not teleport the robot
-or change the latched initial drop height $z_0$. With a $20$ s episode, most
+This changes only $h^{*}$; it does not teleport the robot
+or change the latched initial drop height $h_0$. With a $20$ s episode, most
 rollouts see zero or one mid-episode target change, which is enough to test
 adaptation without turning the task into rapid command following.
 
@@ -113,12 +113,11 @@ The command term stores the following buffers:
 \hline
 Symbol & Buffer & Meaning \\
 \hline
-$h^{*}$ & \texttt{peak\_height} & commanded target height \\
-$z^{*}$ & \texttt{target\_z} & world-frame commanded target apex height \\
-$z_0$ & \texttt{drop\_z} & root height latched after reset \\
-$z_{\max}$ & \texttt{peak\_z} & running root max during rebound ascent \\
-$b_{\downarrow}$ & \texttt{has\_descended} & root has had negative vertical velocity \\
-$b_{\uparrow}$ & \texttt{has\_rebounded} & root has had positive velocity after descent \\
+$h^{*}$ & \texttt{\_target\_apex\_height} & commanded target apex height \\
+$h_0$ & \texttt{drop\_height} & root height latched after reset \\
+$\hat{h}_{\mathrm{apex}}$ & \texttt{last\_apex\_height} & latched valid-apex root height \\
+$\hat{h}^{*}_{\mathrm{apex}}$ & \texttt{last\_apex\_target\_height} & target active at the latched valid apex \\
+$b^{\mathrm{apex}}$ & \texttt{is\_apex} & one-step valid-apex flag \\
 \texttt{armed} & \texttt{\_apex\_armed} & next apex can be counted \\
 \hline
 \end{tabular}
@@ -145,17 +144,15 @@ trampoline rim pinned.
 
 \section{Apex Event and Metrics}
 
-An airborne apex is detected by a root vertical velocity sign change gated by a
-geometric foot-clearance condition:
+A valid apex is detected by a root vertical velocity sign change gated by the
+apex re-arm state and a geometric foot-clearance condition:
 \begin{equation}
-    b^{\mathrm{raw}}_t =
-    b_{\downarrow,t}
-    \wedge b_{\uparrow,t}
-    \wedge (\dot{z}_{t-1} > 0)
+    b^{\mathrm{vel}}_t =
+    (\dot{z}_{t-1} > 0)
     \wedge (\dot{z}_{t} \le 0),
 \end{equation}
 \begin{equation}
-    b^{\mathrm{air}}_t =
+    b^{\mathrm{feet+}}_t =
     \mathbb{I}
     \left[
         \min_{i\in\mathcal{F}} z^{\mathrm{local}}_{i,t}
@@ -163,36 +160,52 @@ geometric foot-clearance condition:
     \right],
 \end{equation}
 where $\mathcal{F}$ is the set of four Go2 feet and $z_{\mathrm{surface}}=0$ in
-the local support frame.
+the local support frame. In the implementation this flag is named
+\texttt{feet\_above\_clearance}.
 
 To avoid counting multiple vertical velocity zero-crossings around the same
-physical apex, the apex detector is armed only once per bounce. After an
-airborne apex is counted, it is disarmed. It is re-armed only when the feet
-return near the support:
+physical apex, the apex detector is armed only once per bounce. After a valid
+apex is counted, it is disarmed. It is re-armed only when the feet
+return below the same clearance threshold:
 \begin{equation}
+    b^{\mathrm{feet-}}_t =
+    \mathbb{I}
+    \left[
     \min_{i\in\mathcal{F}} z^{\mathrm{local}}_{i,t}
-    \le z_{\mathrm{surface}} + 0.08.
+    \le z_{\mathrm{surface}} + 0.08
+    \right].
 \end{equation}
-Thus an apex counted by the metric/reward/timeout logic is
+In the implementation this re-arm flag is named
+\texttt{feet\_below\_clearance}. Thus an apex counted by the
+metric/reward/timeout logic is the valid apex
 \begin{equation}
-    b^{\mathrm{apex}}_t =
+    b^{\mathrm{valid}}_t =
     \texttt{armed}_t
-    \wedge b^{\mathrm{raw}}_t
-    \wedge b^{\mathrm{air}}_t.
+    \wedge b^{\mathrm{vel}}_t
+    \wedge b^{\mathrm{feet+}}_t.
 \end{equation}
+
+The command term is the owner of this apex state machine. When
+$b^{\mathrm{valid}}_t$ fires, it latches the apex height and the target active
+at that instant as \texttt{last\_apex\_height} and
+\texttt{last\_apex\_target\_height}. The target is latched because command
+resampling can occur after event detection and before the delayed reward reads
+the event. Reward and termination terms consume this command-owned event one
+manager step later; this avoids maintaining duplicate apex detectors in reward
+and termination code.
 
 The logged count metrics are:
 \begin{center}
-\begin{tabular}{p{0.28\linewidth}p{0.30\linewidth}p{0.30\linewidth}}
+\begin{tabular}{p{0.34\linewidth}p{0.28\linewidth}p{0.26\linewidth}}
 \hline
 Metric & Condition & Interpretation \\
 \hline
-\texttt{apex\_count} & $b^{\mathrm{apex}}_t$ & physical airborne apex count \\
-\texttt{target\_apex\_count} &
-$b^{\mathrm{apex}}_t \wedge |z_t-z^{*}|<0.25$ &
+\texttt{apex\_count} & $b^{\mathrm{valid}}_t$ & valid apex count \\
+\texttt{height\_matched\_apex\_count} &
+$b^{\mathrm{valid}}_t \wedge |h_t-h^{*}|<0.25$ &
 apex count close to target height \\
 \texttt{error\_peak\_height} &
-mean $|z_t-z^{*}|$ over counted apexes &
+mean $|h_t-h^{*}|$ over counted apexes &
 height tracking error \\
 \hline
 \end{tabular}
@@ -208,15 +221,15 @@ Term & Condition & Role \\
 \hline
 \texttt{base\_orientation} & base tilt angle $>0.6$ rad & failure \\
 \texttt{non\_foot\_contact} & non-foot rigid contact $>1$ N & failure \\
-\texttt{no\_airborne\_apex\_timeout} & no airborne apex for $2$ s & failure \\
+\texttt{no\_valid\_apex\_timeout} & no valid apex for $2$ s & failure \\
 \texttt{time\_out} & $20$ s reached & successful long rollout if other failures absent \\
 \hline
 \end{tabular}
 \end{center}
 
-\texttt{no\_airborne\_apex\_timeout} uses the same re-armed airborne-apex logic as
-the metric and the apex reward. This prevents a standing policy from simply
-waiting for the long time limit.
+\texttt{no\_valid\_apex\_timeout} reads the command-owned valid-apex pulse and
+resets its timer whenever that pulse is observed. This prevents a standing
+policy from simply waiting for the long time limit.
 
 \section{Rewards}
 
@@ -225,8 +238,6 @@ The weighted reward is
 \begin{aligned}
     R_t = \Delta t \Big(
         &-250\,r^{\mathrm{fail}}_t
-        -250\,r^{\mathrm{timeout}}_t
-        +5\,r^{\mathrm{progress}}_t
         +50\,r^{\mathrm{apex}}_t \\
         &-2\,r^{\mathrm{orient}}_t
         -0.5\,r^{\mathrm{inplace}}_t
@@ -242,20 +253,17 @@ The failure pulse is
     r^{\mathrm{fail}}_t =
     \mathbb{I}[\texttt{base\_orientation}]
     + \mathbb{I}[\texttt{non\_foot\_contact}]
-    + \mathbb{I}[\texttt{no\_airborne\_apex\_timeout}].
+    + \mathbb{I}[\texttt{no\_valid\_apex\_timeout}].
 \end{equation}
-The timeout penalty is conditional:
-\begin{equation}
-    r^{\mathrm{timeout}}_t =
-    \mathbb{I}[\texttt{time\_out}]
-    \mathbb{I}[\texttt{apex\_count}<1].
-\end{equation}
-Thus a policy that reaches the normal time limit after producing apexes is not
-penalized by \texttt{failed\_timeout}.
+There is no separate normal-timeout penalty in the current setup. A rollout
+that reaches \texttt{time\_out} without triggering a failure termination is
+treated as a successful long rollout.
 
-Let
+For the delayed apex pulse reward, the height error is computed from the
+latched command event:
 \begin{equation}
-    e^z_t = |z^{w}_{\mathrm{root},t} - z^{*}|.
+    e^{h,\mathrm{apex}}_t =
+    |\texttt{last\_apex\_height}-\texttt{last\_apex\_target\_height}|.
 \end{equation}
 The flat-body gate is
 \begin{equation}
@@ -274,20 +282,11 @@ and the soft foot-clearance gate is
         }{0.015}
     \right).
 \end{equation}
-
-The dense rebound shaping term is
-\begin{equation}
-    r^{\mathrm{progress}}_t =
-    \mathbb{I}[b_{\uparrow,t}]
-    \exp\left(-\left(\frac{e^z_t}{0.25}\right)^2\right)
-    g^{\mathrm{flat}}_t
-    g^{\mathrm{feet}}_t.
-\end{equation}
 The apex pulse reward is
 \begin{equation}
     r^{\mathrm{apex}}_t =
-    \mathbb{I}[b^{\mathrm{apex}}_t]
-    \exp\left(-\left(\frac{e^z_t}{0.10}\right)^2\right)
+    \mathbb{I}[b^{\mathrm{valid}}_{t-1}]
+    \exp\left(-\left(\frac{e^{z,\mathrm{apex}}_t}{0.10}\right)^2\right)
     g^{\mathrm{flat}}_t
     g^{\mathrm{feet}}_t.
 \end{equation}
@@ -328,7 +327,7 @@ File & Purpose \\
 \texttt{go2\_rebounce\_env\_cfg.py} & scene, reset, reward, termination config \\
 \texttt{mdp/commands.py} & rebounce command, apex metrics, re-arm state \\
 \texttt{mdp/events.py} & reset from sampled drop height \\
-\texttt{mdp/rewards.py} & height reward, progress reward, failure pulses \\
+\texttt{mdp/rewards.py} & height reward and failure pulses \\
 \texttt{mdp/terminations.py} & timeout-without-apex termination \\
 \texttt{scripts/rsl\_rl/play-rebounce.py} & play script with apex height printout \\
 \hline
@@ -346,9 +345,9 @@ First train and save a clean baseline with the current config. Record the git
 state, run ID, checkpoint, and videos. The expected healthy indicators are:
 \begin{itemize}
     \item \texttt{Episode\_Termination/time\_out} close to $1$,
-    \item \texttt{no\_airborne\_apex\_timeout} close to $0$,
+    \item \texttt{no\_valid\_apex\_timeout} close to $0$,
     \item \texttt{apex\_count} close to the visually observed bounce count,
-    \item \texttt{target\_apex\_count}/\texttt{apex\_count} high,
+    \item \texttt{height\_matched\_apex\_count}/\texttt{apex\_count} high,
     \item \texttt{error\_peak\_height} low.
 \end{itemize}
 
@@ -518,8 +517,7 @@ variants are:
 Variant & Change & Main question \\
 \hline
 Full & final setup & reference \\
-No apex timeout & remove \texttt{no\_airborne\_apex\_timeout} & is the anti-wait gate needed? \\
-No progress reward & set \texttt{rebound\_progress}=0 & is dense shaping needed? \\
+No apex timeout & remove \texttt{no\_valid\_apex\_timeout} & is the anti-wait gate needed? \\
 No foot gate & remove foot-clearance gates & does it prevent standing or foot exploits? \\
 No in-place reward & remove $xy/yaw$ terms & does the policy drift? \\
 No regulation & remove flight-leg regulation & does leg motion return? \\
@@ -530,8 +528,8 @@ No trampoline DR & fix trampoline parameters & robustness versus specialization 
 \end{center}
 
 For every variant, compare success rate, failure distribution, height error,
-apex count, target-apex count, drift metrics, energy, trampoline setting, and
-videos.
+apex count, height-matched apex count, drift metrics, energy, trampoline
+setting, and videos.
 
 \section{Recommended Order}
 

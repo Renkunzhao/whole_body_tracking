@@ -48,8 +48,8 @@ def _get_rebounce_debug_handles(env):
     command_manager = getattr(env.unwrapped, "command_manager", None)
     if command_manager is None or "hop" not in command_manager.active_terms:
         print("[WARN]: Cannot print apex heights because this task has no 'hop' command.")
-        return None, None
-    return command_manager.get_term("hop"), env.unwrapped.scene["robot"]
+        return None
+    return command_manager.get_term("hop")
 
 
 @hydra_task_config(args_cli.task, "rsl_rl_cfg_entry_point")
@@ -99,7 +99,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     policy = ppo_runner.get_inference_policy(device=env.unwrapped.device)
 
     obs = env.get_observations()
-    hop_command, robot = _get_rebounce_debug_handles(env)
+    hop_command = _get_rebounce_debug_handles(env)
     apex_count = 0
 
     # simulate environment
@@ -109,11 +109,11 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             actions = policy(obs)
         obs, _, _, _ = env.step(actions)
 
-        if hop_command is not None and bool(hop_command.just_apex[0]):
+        if hop_command is not None and bool(hop_command.is_apex[0]):
             apex_count += 1
-            apex_height = float(robot.data.root_pos_w[0, 2])
-            target_height = float(hop_command.target_z[0])
-            drop_height = float(hop_command.drop_z[0])
+            apex_height = float(hop_command.last_apex_height[0])
+            target_height = float(hop_command.last_apex_target_height[0])
+            drop_height = float(hop_command.drop_height[0])
             error = apex_height - target_height
             print(
                 f"[APEX {apex_count:04d}] height={apex_height:.3f} m, target={target_height:.3f} m, "
