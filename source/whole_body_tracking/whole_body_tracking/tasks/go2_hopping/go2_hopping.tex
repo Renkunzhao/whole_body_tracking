@@ -16,6 +16,7 @@ The actor observation is
     \bm{o}^{\pi}_t =
     \left[
         \bm{p}_{\phi,t},\,
+        \bm{c}_t,\,
         \bm{\omega}^{b}_t,\,
         \bm{g}^{b}_t,\,
         \tilde{\bm{q}}_t,\,
@@ -23,7 +24,7 @@ The actor observation is
         \bm{a}_{t-1}
     \right],
     \qquad
-    \dim(\bm{o}^{\pi}_t)=44.
+    \dim(\bm{o}^{\pi}_t)=46.
 \end{equation}
 The critic observation is
 \begin{equation}
@@ -33,7 +34,7 @@ The critic observation is
         \bm{v}^{b}_t
     \right],
     \qquad
-    \dim(\bm{o}^{V}_t)=47.
+    \dim(\bm{o}^{V}_t)=49.
 \end{equation}
 
 \begin{center}
@@ -41,7 +42,8 @@ The critic observation is
 \hline
 Symbol & Dimension & Meaning \\
 \hline
-$\bm{p}_{\phi,t}$ & 2 & hopping phase encoding \\
+$\bm{p}_{\phi,t}$ & 2 & hopping phase encoding $(\sin 2\pi\phi_t,\,\cos 2\pi\phi_t)$ \\
+$\bm{c}_t$ & 2 & hop command $(h^{*}_t,\,t^{*}_{\mathrm{stance},t})$ \\
 $\bm{\omega}^{b}_t$ & 3 & base angular velocity in the base frame \\
 $\bm{g}^{b}_t$ & 3 & projected gravity in the base frame \\
 $\tilde{\bm{q}}_t$ & 12 & relative joint positions \\
@@ -51,6 +53,32 @@ $\bm{v}^{b}_t$ & 3 & base linear velocity in the base frame, critic only \\
 \hline
 \end{tabular}
 \end{center}
+
+\section{Commands}
+
+Two command terms are sampled per env.
+
+\paragraph{Hop ($\bm{c}_t$).} Per-env $(h^{*}_t, t^{*}_{\mathrm{stance},t})$
+sampled uniformly from
+\begin{equation}
+    h^{*}_t \sim \mathcal{U}(0.1,\,0.6)\ \mathrm{m},
+    \qquad
+    t^{*}_{\mathrm{stance},t} \sim \mathcal{U}(0.1,\,0.5)\ \mathrm{s},
+\end{equation}
+with resampling interval drawn from $\mathcal{U}(6,\,12)\ \mathrm{s}$. The
+commanded flight time $t^{*}_{\mathrm{flight},t} = 2\sqrt{2 h^{*}_t / g}$ and
+cycle time $T_t$ are derived from these (Section~3.1).
+
+\paragraph{Twist.} Per-env planar/yaw command sampled uniformly from
+\begin{equation}
+    v^{\mathrm{cmd}}_x,\,v^{\mathrm{cmd}}_y \sim \mathcal{U}(-0.5,\,0.5)\
+    \mathrm{m/s},
+    \qquad
+    \omega^{\mathrm{cmd}}_z \sim \mathcal{U}(-0.5,\,0.5)\ \mathrm{rad/s},
+\end{equation}
+with resampling interval drawn from $\mathcal{U}(3,\,8)\ \mathrm{s}$, $50\%$
+standing fraction, and a heading command driving $\omega^{\mathrm{cmd}}_z$ in
+the remaining envs.
 
 \section{Rewards}
 
@@ -65,6 +93,7 @@ environment is
 \begin{aligned}
     R_t = \Delta t \Big(
         &2.0\,r^{\mathrm{phase}}_t
+        + 140.0\,r^{\mathrm{air}}_t
         + w_{\mathrm{joint}}(n)\,r^{\mathrm{joint}}_t
         + w_{\mathrm{lin}}(n)\,r^{\mathrm{lin}}_t
         + w_{\mathrm{yaw}}(n)\,r^{\mathrm{yaw}}_t  \\
@@ -77,38 +106,44 @@ The curriculum weights are
 \begin{equation}
     w_{\mathrm{joint}}(n) =
     \begin{cases}
-        0, & n \le 300 \times 24, \\
-        0.5, & n > 300 \times 24,
+        0, & n \le 1000 \times 24, \\
+        0.5, & n > 1000 \times 24,
     \end{cases}
     \qquad
     w_{\mathrm{lin}}(n) =
     \begin{cases}
-        0, & n \le 300 \times 24, \\
-        1.0, & n > 300 \times 24,
+        0, & n \le 1000 \times 24, \\
+        1.0, & n > 1000 \times 24,
     \end{cases}
     \qquad
     w_{\mathrm{yaw}}(n) =
     \begin{cases}
-        0, & n \le 300 \times 24, \\
-        1.0, & n > 300 \times 24.
+        0, & n \le 1000 \times 24, \\
+        1.0, & n > 1000 \times 24.
     \end{cases}
 \end{equation}
-In the current config the curriculum terms are commented out because training
-resumes from a checkpoint; the weights above fall back to their terminal
-values $(0.5,\,1.0,\,1.0)$.
+The curriculum terms are active in the current config; the three
+phase-2 weights ramp from $0$ to their terminal values $(0.5,\,1.0,\,1.0)$
+at step $n = 1000 \times 24$.
 
+
+\newpage
 \subsection{Phase Contact}
 
-The normalized hopping phase is
+The hopping phase is per-env, driven by the commanded
+$(h^{*}_t, t^{*}_{\mathrm{stance},t})$ and the corresponding ballistic flight
+time. With $g = 9.81\ \mathrm{m/s^2}$, the per-env cycle time is
+\begin{equation}
+    T_t = t^{*}_{\mathrm{stance},t} + 2\sqrt{\frac{2 h^{*}_t}{g}},
+\end{equation}
+and the normalized phase resets at every command resample:
 \begin{equation}
     \phi_t =
     \operatorname{mod}
     \left(
-        \frac{k_t \Delta t}{T},
+        \frac{(k_t - k_{\mathrm{cycle\_start}})\,\Delta t}{T_t},
         1
-    \right),
-    \qquad
-    T = 1.0\ \mathrm{s}.
+    \right).
 \end{equation}
 The contact state of foot $i$ is
 \begin{equation}
@@ -123,15 +158,15 @@ The contact state of foot $i$ is
     f_{\mathrm{th}} = 5.0\ \mathrm{N},
 \end{equation}
 where $\mathcal{H}$ is the contact-force history window. The desired contact
-phase is
+phase uses a per-env stance fraction
 \begin{equation}
+    \rho_{\mathrm{stance},t} = \frac{t^{*}_{\mathrm{stance},t}}{T_t},
+    \qquad
     d_t =
     \mathbb{I}
     \left[
-        \phi_t < \rho_{\mathrm{stance}}
-    \right],
-    \qquad
-    \rho_{\mathrm{stance}} = 0.45.
+        \phi_t < \rho_{\mathrm{stance},t}
+    \right].
 \end{equation}
 The raw phase-contact reward is
 \begin{equation}
@@ -141,11 +176,55 @@ The raw phase-contact reward is
 \end{equation}
 with weight $2.0$. Here $\mathcal{F}$ is the set of Go2 feet.
 
+\subsection{Air-Time Tracking}
+
+A pulse-on-landing reward ties each commanded flight window to a single
+continuous air phase. Two gates suppress the local optima that
+phase-contact alone cannot:
+\begin{itemize}
+    \item the pulse only fires on landings inside the commanded stance window
+    ($\phi_t < \rho_{\mathrm{stance},t}$), so premature touchdowns during the
+    commanded flight window yield zero;
+    \item at most \emph{one} pulse fires per cycle. An ``armed'' flag $\alpha_t$
+    starts true, is set false the moment the pulse fires, and re-arms on phase
+    wrap (the start of the next cycle). This blocks the ``farm pulses by
+    repeatedly mini-bouncing during stance'' exploit, since the second and
+    later landings in the same cycle contribute zero.
+\end{itemize}
+With the commanded flight time
+$t^{*}_{\mathrm{flight},t} = 2\sqrt{2 h^{*}_t / g}$ and
+$\ell_t = \mathbb{I}[\text{air}\!\to\!\text{contact transition at } t]$
+(``just landed''), the raw reward is
+\begin{equation}
+    r^{\mathrm{air}}_t =
+    \ell_t \, d_t \, \alpha_t \,
+    \exp\!\left(
+        -\,
+        \left(
+            \frac{
+                t^{\mathrm{last\_air}}_t - t^{*}_{\mathrm{flight},t}
+            }{
+                \sigma_{a}
+            }
+        \right)^2
+    \right),
+    \qquad
+    \sigma_{a} = 0.3\ \mathrm{s},
+\end{equation}
+\begin{equation}
+    \alpha_{t+1} =
+    \big(
+        \alpha_t \vee \mathbb{I}[\phi_{t+1} < \phi_t]
+    \big)
+    \wedge \neg(\ell_t d_t \alpha_t).
+\end{equation}
+Its weight is $140.0$.
+
 \subsection{Joint Deviation (Phase-Dependent Exponential)}
 
 Per-joint std values are selected by phase (stance vs. flight) using joint-name
 regex maps. With $s_{j,t} = \sigma^{\mathrm{stance}}_j$ if $\phi_t <
-\rho_{\mathrm{stance}}$, and $\sigma^{\mathrm{flight}}_j$ otherwise, the raw
+\rho_{\mathrm{stance},t}$, and $\sigma^{\mathrm{flight}}_j$ otherwise, the raw
 reward is
 \begin{equation}
     r^{\mathrm{joint}}_t =
@@ -161,19 +240,19 @@ The std maps used are
 \begin{equation}
     \sigma^{\mathrm{stance}} =
     \begin{cases}
-        0.3, & \text{hip} \\
-        0.3, & \text{thigh} \\
-        0.6, & \text{calf}
+        0.5, & \text{hip} \\
+        1.0, & \text{thigh} \\
+        1.0, & \text{calf}
     \end{cases},
     \qquad
     \sigma^{\mathrm{flight}} =
     \begin{cases}
-        0.3, & \text{hip} \\
-        0.3, & \text{thigh} \\
-        0.6, & \text{calf}
+        0.5, & \text{hip} \\
+        1.0, & \text{thigh} \\
+        1.0, & \text{calf}
     \end{cases}.
 \end{equation}
-Curriculum sets the weight from $0$ to $0.5$ after $300 \times 24$ steps.
+Curriculum sets the weight from $0$ to $0.5$ after $1000 \times 24$ steps.
 
 \subsection{Linear Velocity Tracking}
 
@@ -194,7 +273,7 @@ The raw planar-velocity tracking reward is
     \sigma_{v} = \sqrt{0.25}.
 \end{equation}
 The command term is \texttt{twist}. Curriculum sets the weight from $0$ to
-$1.0$ after $300 \times 24$ steps.
+$1.0$ after $1000 \times 24$ steps.
 
 \subsection{Angular Velocity Tracking}
 
@@ -218,7 +297,7 @@ The raw yaw-rate tracking reward is
     \sigma_{\omega} = \sqrt{0.5}.
 \end{equation}
 The command term is \texttt{twist}. Curriculum sets the weight from $0$ to
-$1.0$ after $300 \times 24$ steps.
+$1.0$ after $1000 \times 24$ steps.
 
 \subsection{Action Rate}
 
@@ -257,7 +336,7 @@ An episode terminates when any of the following conditions hold:
     (matched by regex \texttt{\^{}(?!.*\_foot\$).*}) registers contact force
     magnitude above $1.0\ \mathrm{N}$.
     \item \textbf{Time out:} the episode length reaches
-    $10.0\ \mathrm{s}$ (counted as a time-out, not a failure).
+    $20.0\ \mathrm{s}$ (counted as a time-out, not a failure).
 \end{itemize}
 
 \end{document}

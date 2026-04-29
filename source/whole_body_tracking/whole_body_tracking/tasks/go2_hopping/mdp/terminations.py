@@ -75,6 +75,7 @@ class no_airborne_apex_timeout(ManagerTermBase):
         super().__init__(cfg, env)
         self._prev_vz = torch.zeros(env.num_envs, device=env.device)
         self._time_since_apex = torch.zeros(env.num_envs, device=env.device)
+        self._apex_armed = torch.ones(env.num_envs, dtype=torch.bool, device=env.device)
         asset_cfg: SceneEntityCfg = cfg.params.get("asset_cfg", SceneEntityCfg("robot"))
         self._asset_name = asset_cfg.name
         foot_asset_cfg: SceneEntityCfg | None = cfg.params.get("foot_asset_cfg")
@@ -98,14 +99,21 @@ class no_airborne_apex_timeout(ManagerTermBase):
         vz = robot.data.root_lin_vel_w[:, 2]
 
         apex = (self._prev_vz > vz_threshold) & (vz <= vz_threshold)
+        foot_airborne = torch.ones(env.num_envs, dtype=torch.bool, device=env.device)
+        foot_near = torch.ones(env.num_envs, dtype=torch.bool, device=env.device)
         if foot_clearance is not None and self._foot_asset_name is not None:
             foot_asset: Articulation = env.scene[self._foot_asset_name]
             foot_z_local = foot_asset.data.body_pos_w[:, self._foot_body_ids, 2] - env.scene.env_origins[:, 2:3]
             min_foot_z = torch.min(foot_z_local, dim=1).values
-            apex = apex & (min_foot_z > surface_z + foot_clearance)
+            foot_threshold = surface_z + foot_clearance
+            foot_airborne = min_foot_z > foot_threshold
+            foot_near = min_foot_z <= foot_threshold
+        self._apex_armed = self._apex_armed | foot_near
+        apex = self._apex_armed & apex & foot_airborne
 
         self._time_since_apex += env.step_dt
         self._time_since_apex = torch.where(apex, torch.zeros_like(self._time_since_apex), self._time_since_apex)
+        self._apex_armed = self._apex_armed & ~apex
         timed_out = self._time_since_apex > timeout
         self._prev_vz = vz.clone()
         return timed_out
@@ -114,6 +122,8 @@ class no_airborne_apex_timeout(ManagerTermBase):
         if env_ids is None:
             self._prev_vz.zero_()
             self._time_since_apex.zero_()
+            self._apex_armed.fill_(True)
         else:
             self._prev_vz[env_ids] = 0.0
             self._time_since_apex[env_ids] = 0.0
+            self._apex_armed[env_ids] = True

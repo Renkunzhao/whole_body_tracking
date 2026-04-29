@@ -274,6 +274,7 @@ class UniformRebounceCommand(CommandTerm):
         self._has_descended = torch.zeros(n, dtype=torch.bool, device=dev)
         self._has_rebounded = torch.zeros(n, dtype=torch.bool, device=dev)
         self._just_apex = torch.zeros(n, dtype=torch.bool, device=dev)
+        self._apex_armed = torch.ones(n, dtype=torch.bool, device=dev)
         self._prev_vz = torch.zeros(n, device=dev)
         self._apex_count = torch.zeros(n, device=dev)
         self._target_apex_count = torch.zeros(n, device=dev)
@@ -325,12 +326,14 @@ class UniformRebounceCommand(CommandTerm):
     def target_apex_count(self) -> torch.Tensor:
         return self._target_apex_count
 
-    def _airborne_apex(self, apex: torch.Tensor) -> torch.Tensor:
+    def _foot_airborne_and_near(self) -> tuple[torch.Tensor, torch.Tensor]:
+        ones = torch.ones(self.num_envs, dtype=torch.bool, device=self.device)
         if self._foot_asset is None or self._foot_body_ids is None:
-            return apex
+            return ones, ones
         foot_z_local = self._foot_asset.data.body_pos_w[:, self._foot_body_ids, 2] - self._env.scene.env_origins[:, 2:3]
         min_foot_z = torch.min(foot_z_local, dim=1).values
-        return apex & (min_foot_z > self.cfg.surface_z + self.cfg.foot_clearance)
+        threshold = self.cfg.surface_z + self.cfg.foot_clearance
+        return min_foot_z > threshold, min_foot_z <= threshold
 
     def _target_apex(self, airborne_apex: torch.Tensor, z: torch.Tensor) -> torch.Tensor:
         height_ok = torch.abs(z - self._drop_z) < self.cfg.apex_height_tolerance
@@ -341,8 +344,10 @@ class UniformRebounceCommand(CommandTerm):
         vz = self.robot.data.root_lin_vel_w[:, 2]
         # Periodic state machine:
         # descending -> rebound ascent -> apex pulse -> re-arm for next fall.
+        foot_airborne, foot_near = self._foot_airborne_and_near()
+        self._apex_armed = self._apex_armed | foot_near
         apex = self._has_descended & self._has_rebounded & (self._prev_vz > 0.0) & (vz <= 0.0)
-        airborne_apex = self._airborne_apex(apex)
+        airborne_apex = self._apex_armed & apex & foot_airborne
         target_apex = self._target_apex(airborne_apex, z)
         self._just_apex = airborne_apex
 
@@ -365,6 +370,7 @@ class UniformRebounceCommand(CommandTerm):
         self._target_apex_count = torch.where(target_apex, self._target_apex_count + 1.0, self._target_apex_count)
         self.metrics["apex_count"][:] = self._apex_count
         self.metrics["target_apex_count"][:] = self._target_apex_count
+        self._apex_armed = self._apex_armed & ~airborne_apex
 
         self._has_descended = self._has_descended | (vz < 0)
         # After a completed apex, clear rebound state so the next reward pulse
@@ -393,6 +399,7 @@ class UniformRebounceCommand(CommandTerm):
             self._has_descended.zero_()
             self._has_rebounded.zero_()
             self._just_apex.zero_()
+            self._apex_armed.fill_(True)
             self._prev_vz.zero_()
             self._apex_count.zero_()
             self._target_apex_count.zero_()
@@ -402,6 +409,7 @@ class UniformRebounceCommand(CommandTerm):
             self._has_descended[env_ids] = False
             self._has_rebounded[env_ids] = False
             self._just_apex[env_ids] = False
+            self._apex_armed[env_ids] = True
             self._prev_vz[env_ids] = 0.0
             self._apex_count[env_ids] = 0.0
             self._target_apex_count[env_ids] = 0.0

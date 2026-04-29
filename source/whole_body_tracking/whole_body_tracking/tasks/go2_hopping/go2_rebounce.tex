@@ -1,0 +1,421 @@
+\documentclass[11pt, a4paper]{article}
+\usepackage{amsmath, amssymb, bm}
+\usepackage{geometry}
+\geometry{margin=2.5cm}
+\setlength{\emergencystretch}{2em}
+
+\title{Go2 Continuous Rebounce Setup and Experiment Plan}
+\date{}
+
+\begin{document}
+\maketitle
+
+\section{Current Task}
+
+The current task is continuous rebounce control for Go2. At reset, each
+environment samples a scalar height command
+\begin{equation}
+    h^{*} \sim \mathcal{U}(0.5, 0.8)\ \mathrm{m},
+\end{equation}
+then places the robot base at the corresponding height with zero root velocity
+and the default joint state. The policy must keep rebounding for the full
+episode. The objective is not to jump higher forever, but to make each rebound
+apex return close to the reset/drop height while maintaining a flat quadruped
+posture.
+
+Unlike the earlier single-rebounce setup, reaching an apex is no longer a
+termination condition. The episode continues until either a failure condition is
+met or the $20$ s time limit is reached. A successful rollout should therefore
+show repeated cycles of
+\begin{center}
+    fall,\quad support interaction,\quad rebound,\quad airborne apex,\quad
+    re-arm after the feet return near the support.
+\end{center}
+
+\section{Environment Variants}
+
+Two environment IDs are used:
+\begin{center}
+\begin{tabular}{lll}
+\hline
+ID & Scene & Notes \\
+\hline
+\texttt{Go2-Rebounce-Flat} & rigid plane & 4096 envs, env spacing $2.5$ m \\
+\texttt{Go2-Rebounce-Trampoline} & deformable trampoline & 2048 envs, env spacing $4.0$ m \\
+\hline
+\end{tabular}
+\end{center}
+
+The trampoline variant keeps the same rebounce MDP terms but replaces the
+support with a deformable trampoline and repins the trampoline rim. Task success
+does not rely on rigid-deformable contact sensors. Apex and foot-clearance gates
+use only root state and kinematic foot body positions.
+
+\section{Timing}
+
+The simulator time step and action decimation are
+\begin{equation}
+    \Delta t_{\mathrm{sim}} = 0.005\ \mathrm{s},
+    \qquad
+    d = 4,
+    \qquad
+    \Delta t = d\Delta t_{\mathrm{sim}} = 0.02\ \mathrm{s}.
+\end{equation}
+The current training episode length is
+\begin{equation}
+    T_{\mathrm{episode}} = 20\ \mathrm{s}.
+\end{equation}
+IsaacLab multiplies every weighted reward term by $\Delta t$, and logged
+\texttt{Episode\_Reward/*} values are additionally divided by
+$T_{\mathrm{episode}}$.
+
+\section{Reset and Command}
+
+The rebounce command is
+\begin{equation}
+    \bm{c} = [h^{*}].
+\end{equation}
+In the current baseline, the reset height and the target rebound-apex height are
+the same scalar. The reset event writes $h^{*}$ into the command buffer and sets
+the root state to
+\begin{equation}
+    \bm{p}_{\mathrm{root}} =
+    \bm{o}_{\mathrm{env}} +
+    \left[p_x^0,\ p_y^0,\ h^{*}+z_{\mathrm{offset}}\right],
+    \qquad
+    \bm{v}_{\mathrm{root}}=\bm{0},
+\end{equation}
+where $z_{\mathrm{offset}}=0$ in the current config. Joint positions are reset to
+the default Go2 pose and joint velocities are reset to zero.
+
+The command term stores the following buffers:
+\begin{center}
+\begin{tabular}{lll}
+\hline
+Symbol & Buffer & Meaning \\
+\hline
+$h^{*}$ & \texttt{peak\_height} & commanded target height \\
+$z_0$ & \texttt{drop\_z} & root height latched after reset \\
+$z_{\max}$ & \texttt{peak\_z} & running root max during rebound ascent \\
+$b_{\downarrow}$ & \texttt{has\_descended} & root has had negative vertical velocity \\
+$b_{\uparrow}$ & \texttt{has\_rebounded} & root has had positive velocity after descent \\
+\texttt{armed} & \texttt{\_apex\_armed} & next apex can be counted \\
+\hline
+\end{tabular}
+\end{center}
+
+\section{Observations and Actions}
+
+The actor observation is
+\begin{equation}
+    \bm{o}^{\pi}_t =
+    \left[
+        h^{*},\,
+        \bm{\omega}^{b}_t,\,
+        \bm{g}^{b}_t,\,
+        \tilde{\bm{q}}_t,\,
+        \tilde{\dot{\bm{q}}}_t,\,
+        \bm{a}_{t-1}
+    \right].
+\end{equation}
+The critic additionally observes world root position and base linear velocity.
+The policy action is a 12-DoF joint-position target action with the default Go2
+joint offset. In the trampoline variant, a separate action term keeps the
+trampoline rim pinned.
+
+\section{Apex Event and Metrics}
+
+An airborne apex is detected by a root vertical velocity sign change gated by a
+geometric foot-clearance condition:
+\begin{equation}
+    b^{\mathrm{raw}}_t =
+    b_{\downarrow,t}
+    \wedge b_{\uparrow,t}
+    \wedge (\dot{z}_{t-1} > 0)
+    \wedge (\dot{z}_{t} \le 0),
+\end{equation}
+\begin{equation}
+    b^{\mathrm{air}}_t =
+    \mathbb{I}
+    \left[
+        \min_{i\in\mathcal{F}} z^{\mathrm{local}}_{i,t}
+        > z_{\mathrm{surface}} + 0.08
+    \right],
+\end{equation}
+where $\mathcal{F}$ is the set of four Go2 feet and $z_{\mathrm{surface}}=0$ in
+the local support frame.
+
+To avoid counting multiple vertical velocity zero-crossings around the same
+physical apex, the apex detector is armed only once per bounce. After an
+airborne apex is counted, it is disarmed. It is re-armed only when the feet
+return near the support:
+\begin{equation}
+    \min_{i\in\mathcal{F}} z^{\mathrm{local}}_{i,t}
+    \le z_{\mathrm{surface}} + 0.08.
+\end{equation}
+Thus an apex counted by the metric/reward/timeout logic is
+\begin{equation}
+    b^{\mathrm{apex}}_t =
+    \texttt{armed}_t
+    \wedge b^{\mathrm{raw}}_t
+    \wedge b^{\mathrm{air}}_t.
+\end{equation}
+
+The logged count metrics are:
+\begin{center}
+\begin{tabular}{p{0.28\linewidth}p{0.30\linewidth}p{0.30\linewidth}}
+\hline
+Metric & Condition & Interpretation \\
+\hline
+\texttt{apex\_count} & $b^{\mathrm{apex}}_t$ & physical airborne apex count \\
+\texttt{target\_apex\_count} &
+$b^{\mathrm{apex}}_t \wedge |z_t-z_0|<0.25$ &
+apex count close to target height \\
+\texttt{error\_peak\_height} &
+mean $|z_t-z_0|$ over counted apexes &
+height tracking error \\
+\hline
+\end{tabular}
+\end{center}
+
+\section{Termination}
+
+The current termination terms are:
+\begin{center}
+\begin{tabular}{p{0.35\linewidth}p{0.28\linewidth}p{0.27\linewidth}}
+\hline
+Term & Condition & Role \\
+\hline
+\texttt{base\_orientation} & base tilt angle $>0.6$ rad & failure \\
+\texttt{non\_foot\_contact} & non-foot rigid contact $>1$ N & failure \\
+\texttt{no\_airborne\_apex\_timeout} & no airborne apex for $2$ s & failure \\
+\texttt{time\_out} & $20$ s reached & successful long rollout if other failures absent \\
+\hline
+\end{tabular}
+\end{center}
+
+\texttt{no\_airborne\_apex\_timeout} uses the same re-armed airborne-apex logic as
+the metric and the apex reward. This prevents a standing policy from simply
+waiting for the long time limit.
+
+\section{Rewards}
+
+The weighted reward is
+\begin{equation}
+\begin{aligned}
+    R_t = \Delta t \Big(
+        &-250\,r^{\mathrm{fail}}_t
+        -250\,r^{\mathrm{timeout}}_t
+        +5\,r^{\mathrm{progress}}_t
+        +50\,r^{\mathrm{apex}}_t \\
+        &-2\,r^{\mathrm{orient}}_t
+        -10^{-2}\,r^{\mathrm{action}}_t
+        -0.05\,r^{\mathrm{joint}}_t
+        -10\,r^{\mathrm{limit}}_t
+    \Big).
+\end{aligned}
+\end{equation}
+
+The failure pulse is
+\begin{equation}
+    r^{\mathrm{fail}}_t =
+    \mathbb{I}[\texttt{base\_orientation}]
+    + \mathbb{I}[\texttt{non\_foot\_contact}]
+    + \mathbb{I}[\texttt{no\_airborne\_apex\_timeout}].
+\end{equation}
+The timeout penalty is conditional:
+\begin{equation}
+    r^{\mathrm{timeout}}_t =
+    \mathbb{I}[\texttt{time\_out}]
+    \mathbb{I}[\texttt{apex\_count}<1].
+\end{equation}
+Thus a policy that reaches the normal time limit after producing apexes is not
+penalized by \texttt{failed\_timeout}.
+
+Let
+\begin{equation}
+    e^z_t = |z^{w}_{\mathrm{root},t} - z_0|.
+\end{equation}
+The flat-body gate is
+\begin{equation}
+    g^{\mathrm{flat}}_t =
+    \exp\left(
+        -\frac{\left\lVert \bm{g}^{b}_{t,xy}\right\rVert^2}{0.35^2}
+    \right),
+\end{equation}
+and the soft foot-clearance gate is
+\begin{equation}
+    g^{\mathrm{feet}}_t =
+    \sigma\left(
+        \frac{
+            \min_{i\in\mathcal{F}} z^{\mathrm{local}}_{i,t}
+            -(z_{\mathrm{surface}}+0.08)
+        }{0.015}
+    \right).
+\end{equation}
+
+The dense rebound shaping term is
+\begin{equation}
+    r^{\mathrm{progress}}_t =
+    \mathbb{I}[b_{\uparrow,t}]
+    \exp\left(-\left(\frac{e^z_t}{0.25}\right)^2\right)
+    g^{\mathrm{flat}}_t
+    g^{\mathrm{feet}}_t.
+\end{equation}
+The apex pulse reward is
+\begin{equation}
+    r^{\mathrm{apex}}_t =
+    \mathbb{I}[b^{\mathrm{apex}}_t]
+    \exp\left(-\left(\frac{e^z_t}{0.10}\right)^2\right)
+    g^{\mathrm{flat}}_t
+    g^{\mathrm{feet}}_t.
+\end{equation}
+The remaining penalties are standard orientation, action-rate, joint-deviation,
+and joint-position-limit regularizers.
+
+\paragraph{Reward scale.}
+In the current $20$ s setup, a single perfect apex pulse contributes
+\[
+    50 \cdot 0.02 / 20 = 0.05
+\]
+to the logged \texttt{Episode\_Reward/rebounce\_height}. A single failure
+termination contributes approximately
+\[
+    -250 \cdot 0.02 / 20 = -0.25
+\]
+for the environments where that failure happened, before averaging over all
+reset environments.
+
+\section{Implementation Files}
+
+\begin{center}
+\begin{tabular}{ll}
+\hline
+File & Purpose \\
+\hline
+\texttt{go2\_rebounce\_env\_cfg.py} & scene, reset, reward, termination config \\
+\texttt{mdp/commands.py} & rebounce command, apex metrics, re-arm state \\
+\texttt{mdp/events.py} & reset from sampled drop height \\
+\texttt{mdp/rewards.py} & height reward, progress reward, failure pulses \\
+\texttt{mdp/terminations.py} & timeout-without-apex termination \\
+\texttt{scripts/rsl\_rl/play-rebounce.py} & play script with apex height printout \\
+\hline
+\end{tabular}
+\end{center}
+
+\section{Experiment Roadmap}
+
+The experiment order should separate task-definition changes from style,
+efficiency, and final ablations.
+
+\subsection{Step 0: Freeze the Current Baseline}
+
+First train and save a clean baseline with the current config. Record the git
+state, run ID, checkpoint, and videos. The expected healthy indicators are:
+\begin{itemize}
+    \item \texttt{Episode\_Termination/time\_out} close to $1$,
+    \item \texttt{no\_airborne\_apex\_timeout} close to $0$,
+    \item \texttt{apex\_count} close to the visually observed bounce count,
+    \item \texttt{target\_apex\_count}/\texttt{apex\_count} high,
+    \item \texttt{error\_peak\_height} low.
+\end{itemize}
+
+\subsection{Step 1: Decouple Initial Drop Height from Target Apex Height}
+
+The current baseline uses
+\[
+    h_{\mathrm{drop}} = h^{*}.
+\]
+The first task-definition experiment should decouple them:
+\[
+    h^{*} \sim \mathcal{U}(0.5,0.8), \qquad
+    h_{\mathrm{drop}} = h^{*} + \epsilon.
+\]
+Start with a small offset
+\[
+    \epsilon \sim \mathcal{U}(-0.1,0.1)\ \mathrm{m},
+\]
+then increase the range or sample the two heights independently if the policy
+remains stable. This tests whether the policy controls rebound height, rather
+than only recovering to the height from which it was dropped.
+
+\subsection{Step 2: Add In-Place Hopping}
+
+After the height task is fixed, add penalties or tracking terms for horizontal
+and yaw drift. Suggested diagnostics are
+\[
+    \lVert \bm{p}_{xy,t}-\bm{p}_{xy,0}\rVert,\qquad
+    \lVert \bm{v}_{xy,t}\rVert,\qquad
+    |\psi_t-\psi_0|,\qquad
+    |\dot{\psi}_t|.
+\]
+Start with small weights so vertical rebounce quality is not suppressed. The
+goal is to keep the robot rebounding in place without sacrificing apex-height
+tracking.
+
+\subsection{Step 3: Regulate Leg Motion in Flight}
+
+The current policy can show fast leg motion in the air. Test the following
+regularization variants one at a time:
+\begin{enumerate}
+    \item increase \texttt{joint\_deviation\_l1} weight, e.g.
+    $-0.05 \rightarrow -0.10 \rightarrow -0.20$;
+    \item add a joint-velocity penalty, starting from a small weight;
+    \item reduce or reshape the foot-clearance gate to check whether the apex
+    reward encourages spreading or lifting the feet near the apex.
+\end{enumerate}
+This step should be done before energy optimization so the source of the flight
+leg motion is identifiable.
+
+\subsection{Step 4: Add Energy Optimization}
+
+Only after the behavior is stable and visually acceptable, add energy terms.
+Candidate penalties are
+\[
+    \sum_j \tau_{j,t}^{2}
+    \qquad\text{or}\qquad
+    \sum_j |\tau_{j,t}\dot{q}_{j,t}|.
+\]
+Use small weights and monitor \texttt{target\_apex\_count},
+\texttt{error\_peak\_height}, and \texttt{time\_out}. If energy decreases but
+height tracking or survival degrades, the weight is too large.
+
+\subsection{Step 5: Final Ablation Experiments}
+
+Run formal ablations after the final task definition is stable. Suggested
+variants are:
+\begin{center}
+\begin{tabular}{p{0.22\linewidth}p{0.34\linewidth}p{0.34\linewidth}}
+\hline
+Variant & Change & Main question \\
+\hline
+Full & final setup & reference \\
+No apex timeout & remove \texttt{no\_airborne\_apex\_timeout} & is the anti-wait gate needed? \\
+No progress reward & set \texttt{rebound\_progress}=0 & is dense shaping needed? \\
+No foot gate & remove foot-clearance gates & does it prevent standing or foot exploits? \\
+No in-place reward & remove $xy/yaw$ terms & does the policy drift? \\
+No regulation & remove flight-leg regulation & does leg motion return? \\
+No energy reward & remove energy term & efficiency versus performance \\
+\hline
+\end{tabular}
+\end{center}
+
+For every variant, compare success rate, failure distribution, height error,
+apex count, target-apex count, drift metrics, energy, and videos.
+
+\section{Recommended Order}
+
+The recommended order is:
+\begin{enumerate}
+    \item freeze the current continuous-rebounce baseline;
+    \item decouple drop height and target height;
+    \item add in-place constraints;
+    \item regulate flight leg motion;
+    \item add energy optimization;
+    \item run final ablations.
+\end{enumerate}
+
+This order first fixes the task definition, then the motion style, then
+efficiency, and only then performs explanatory ablations.
+
+\end{document}

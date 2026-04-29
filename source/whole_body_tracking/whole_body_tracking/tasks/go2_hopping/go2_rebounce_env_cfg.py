@@ -328,7 +328,7 @@ class Go2RebounceEnvCfg(ManagerBasedRLEnvCfg):
         """Post initialization."""
         # general settings
         self.decimation = 4
-        self.episode_length_s = 4.0
+        self.episode_length_s = 20.0
         # simulation settings
         self.sim.dt = 0.005
         self.sim.render_interval = self.decimation
@@ -341,8 +341,7 @@ class Go2RebounceEnvCfg(ManagerBasedRLEnvCfg):
         self.viewer.body_name = None
 
     def apply_play_overrides(self):
-        self.episode_length_s = 1.0e9
-        self.commands.hop.ranges.peak_height = (0.6, 0.6)
+        self.commands.hop.ranges.peak_height = (0.5, 0.8)
         return self
 
 

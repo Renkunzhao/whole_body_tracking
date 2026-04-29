@@ -143,6 +143,7 @@ class rebounce_height_tracking_exp(ManagerTermBase):
     def __init__(self, cfg: RewardTermCfg, env: ManagerBasedRLEnv):
         super().__init__(cfg, env)
         self._prev_vz = torch.zeros(env.num_envs, device=env.device)
+        self._apex_armed = torch.ones(env.num_envs, dtype=torch.bool, device=env.device)
         asset_cfg: SceneEntityCfg = cfg.params.get("asset_cfg", SceneEntityCfg("robot"))
         self._asset_name = asset_cfg.name
         foot_asset_cfg: SceneEntityCfg = cfg.params["foot_asset_cfg"]
@@ -167,23 +168,34 @@ class rebounce_height_tracking_exp(ManagerTermBase):
         vz = robot.data.root_lin_vel_w[:, 2]
         cmd = env.command_manager.get_term(command_name)
 
-        apex = cmd.has_descended & cmd.has_rebounded & (self._prev_vz > vz_threshold) & (vz <= vz_threshold)
+        foot_asset: Articulation = env.scene[self._foot_asset_name]
+        foot_z_local = foot_asset.data.body_pos_w[:, self._foot_body_ids, 2] - env.scene.env_origins[:, 2:3]
+        min_foot_z = torch.min(foot_z_local, dim=1).values
+        foot_threshold = surface_z + foot_clearance
+        foot_airborne = min_foot_z > foot_threshold
+        foot_near = min_foot_z <= foot_threshold
+        self._apex_armed = self._apex_armed | foot_near
+
+        raw_apex = cmd.has_descended & cmd.has_rebounded & (self._prev_vz > vz_threshold) & (vz <= vz_threshold)
+        apex = self._apex_armed & raw_apex & foot_airborne
         self._prev_vz = vz.clone()
 
         orientation_error = torch.sum(torch.square(robot.data.projected_gravity_b[:, :2]), dim=1)
         orientation_reward = torch.exp(-orientation_error / (orientation_std * orientation_std))
-        foot_asset: Articulation = env.scene[self._foot_asset_name]
         foot_reward = _feet_clearance_gate(
             env, foot_asset, self._foot_body_ids, foot_clearance, foot_clearance_softness, surface_z
         )
         height_error = torch.abs(robot.data.root_pos_w[:, 2] - cmd.drop_z)
+        self._apex_armed = self._apex_armed & ~apex
         return apex.float() * torch.exp(-torch.square(height_error / std)) * orientation_reward * foot_reward
 
     def reset(self, env_ids=None):
         if env_ids is None:
             self._prev_vz.zero_()
+            self._apex_armed.fill_(True)
         else:
             self._prev_vz[env_ids] = 0.0
+            self._apex_armed[env_ids] = True
 
 
 def rebounce_height_progress_exp(
