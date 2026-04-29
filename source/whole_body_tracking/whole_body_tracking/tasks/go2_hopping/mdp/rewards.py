@@ -14,19 +14,6 @@ if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
 
 
-def _feet_clearance_gate(
-    env: ManagerBasedRLEnv,
-    asset: Articulation,
-    foot_body_ids: list[int] | slice,
-    foot_clearance: float,
-    foot_clearance_softness: float,
-    surface_z: float,
-) -> torch.Tensor:
-    foot_z_local = asset.data.body_pos_w[:, foot_body_ids, 2] - env.scene.env_origins[:, 2:3]
-    min_foot_z = torch.min(foot_z_local, dim=1).values
-    return torch.sigmoid((min_foot_z - (surface_z + foot_clearance)) / foot_clearance_softness)
-
-
 class joint_deviation_phase_exp(ManagerTermBase):
     """Per-joint exponential posture reward with different std for stance and flight.
 
@@ -171,17 +158,15 @@ class rebounce_height_tracking_exp(ManagerTermBase):
     apex height". The command term owns the apex state machine and latches the
     apex height/target at the detected event. This reward intentionally consumes
     that command event one manager step later, with value
-    ``exp(-((apex_height - target_apex_height) / std)^2)`` multiplied by flat-orientation and
-    foot-clearance gates.
+    ``exp(-((apex_height - target_apex_height) / std)^2)`` multiplied by a flat-orientation gate.
+    Foot clearance is handled by the command-owned valid-apex detector, not by
+    another soft gate in this reward.
     """
 
     def __init__(self, cfg: RewardTermCfg, env: ManagerBasedRLEnv):
         super().__init__(cfg, env)
         asset_cfg: SceneEntityCfg = cfg.params.get("asset_cfg", SceneEntityCfg("robot"))
         self._asset_name = asset_cfg.name
-        foot_asset_cfg: SceneEntityCfg = cfg.params["foot_asset_cfg"]
-        self._foot_asset_name = foot_asset_cfg.name
-        self._foot_body_ids = foot_asset_cfg.body_ids
 
     def __call__(
         self,
@@ -189,24 +174,16 @@ class rebounce_height_tracking_exp(ManagerTermBase):
         command_name: str,
         std: float,
         orientation_std: float,
-        foot_asset_cfg: SceneEntityCfg,
-        foot_clearance: float,
-        foot_clearance_softness: float,
-        surface_z: float = 0.0,
         asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
     ) -> torch.Tensor:
-        del asset_cfg, foot_asset_cfg  # resolved in __init__
+        del asset_cfg  # resolved in __init__
         robot: Articulation = env.scene[self._asset_name]
         cmd = env.command_manager.get_term(command_name)
 
-        foot_asset: Articulation = env.scene[self._foot_asset_name]
         orientation_error = torch.sum(torch.square(robot.data.projected_gravity_b[:, :2]), dim=1)
         orientation_reward = torch.exp(-orientation_error / (orientation_std * orientation_std))
-        foot_reward = _feet_clearance_gate(
-            env, foot_asset, self._foot_body_ids, foot_clearance, foot_clearance_softness, surface_z
-        )
         height_error = torch.abs(cmd.last_apex_height - cmd.last_apex_target_height)
-        return cmd.is_apex.float() * torch.exp(-torch.square(height_error / std)) * orientation_reward * foot_reward
+        return cmd.is_apex.float() * torch.exp(-torch.square(height_error / std)) * orientation_reward
 
 
 class termination_term(ManagerTermBase):

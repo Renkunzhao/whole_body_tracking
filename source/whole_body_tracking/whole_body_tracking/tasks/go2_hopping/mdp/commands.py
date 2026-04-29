@@ -306,8 +306,9 @@ class UniformRebounceCommand(CommandTerm):
             return ones, ones
         foot_z_local = self._foot_asset.data.body_pos_w[:, self._foot_body_ids, 2] - self._env.scene.env_origins[:, 2:3]
         min_foot_z = torch.min(foot_z_local, dim=1).values
+        max_foot_z = torch.max(foot_z_local, dim=1).values
         threshold = self.cfg.surface_z + self.cfg.foot_clearance
-        return min_foot_z > threshold, min_foot_z <= threshold
+        return min_foot_z > threshold, max_foot_z <= threshold
 
     def _height_matched_apex(self, is_apex: torch.Tensor, height: torch.Tensor) -> torch.Tensor:
         height_ok = torch.abs(height - self.target_apex_height) < self.cfg.apex_height_tolerance

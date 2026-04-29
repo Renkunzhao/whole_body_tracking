@@ -171,7 +171,7 @@ return below the same clearance threshold:
     b^{\mathrm{feet-}}_t =
     \mathbb{I}
     \left[
-    \min_{i\in\mathcal{F}} z^{\mathrm{local}}_{i,t}
+    \max_{i\in\mathcal{F}} z^{\mathrm{local}}_{i,t}
     \le z_{\mathrm{surface}} + 0.08
     \right].
 \end{equation}
@@ -272,23 +272,14 @@ The flat-body gate is
         -\frac{\left\lVert \bm{g}^{b}_{t,xy}\right\rVert^2}{0.35^2}
     \right),
 \end{equation}
-and the soft foot-clearance gate is
-\begin{equation}
-    g^{\mathrm{feet}}_t =
-    \sigma\left(
-        \frac{
-            \min_{i\in\mathcal{F}} z^{\mathrm{local}}_{i,t}
-            -(z_{\mathrm{surface}}+0.08)
-        }{0.015}
-    \right).
-\end{equation}
+The height reward does not include an additional soft foot-clearance gate;
+foot clearance is enforced only by the valid-apex event detector.
 The apex pulse reward is
 \begin{equation}
     r^{\mathrm{apex}}_t =
     \mathbb{I}[b^{\mathrm{valid}}_{t-1}]
-    \exp\left(-\left(\frac{e^{z,\mathrm{apex}}_t}{0.10}\right)^2\right)
-    g^{\mathrm{flat}}_t
-    g^{\mathrm{feet}}_t.
+    \exp\left(-\left(\frac{e^{h,\mathrm{apex}}_t}{0.10}\right)^2\right)
+    g^{\mathrm{flat}}_t.
 \end{equation}
 The remaining penalties are standard orientation, action-rate, joint-deviation,
 and joint-position-limit regularizers. The in-place term penalizes drift from
@@ -394,8 +385,8 @@ Test the following regularization variants one at a time:
     posture penalty because it can suppress useful trampoline-exploitation
     strategies;
     \item add a small joint-velocity penalty to reduce fast flight leg motion;
-    \item reduce or reshape the foot-clearance gate to check whether the apex
-    reward encourages spreading or lifting the feet near the apex.
+    \item test whether the command-side hard foot-clearance apex gate is still
+    needed after removing the reward-side soft foot-clearance gate.
 \end{enumerate}
 This step should be done before energy optimization so that the energy term is
 not merely compensating for a leg-motion artifact. After each variant, check
@@ -518,7 +509,7 @@ Variant & Change & Main question \\
 \hline
 Full & final setup & reference \\
 No apex timeout & remove \texttt{no\_valid\_apex\_timeout} & is the anti-wait gate needed? \\
-No foot gate & remove foot-clearance gates & does it prevent standing or foot exploits? \\
+No foot gate & remove the command-side valid-apex foot-clearance gate & does it prevent standing or foot exploits? \\
 No in-place reward & remove $xy/yaw$ terms & does the policy drift? \\
 No regulation & remove flight-leg regulation & does leg motion return? \\
 No energy reward & remove energy term & efficiency versus performance \\

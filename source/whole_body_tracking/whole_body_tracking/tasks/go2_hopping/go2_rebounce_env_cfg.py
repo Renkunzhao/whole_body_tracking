@@ -225,10 +225,6 @@ class RewardsCfg:
             "command_name": "hop",
             "std": 0.10,
             "orientation_std": 0.35,
-            "foot_asset_cfg": SceneEntityCfg("robot", body_names=list(GO2_FOOT_BODY_NAMES)),
-            "foot_clearance": 0.08,
-            "foot_clearance_softness": 0.015,
-            "surface_z": 0.0,
         },
     )
     flat_orientation = RewTerm(func=mdp.flat_orientation_l2, weight=-2.0)
