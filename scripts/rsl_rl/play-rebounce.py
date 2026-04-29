@@ -111,17 +111,13 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
         if hop_command is not None and bool(hop_command.just_apex[0]):
             apex_count += 1
-            env_origin_z = float(env.unwrapped.scene.env_origins[0, 2])
-            apex_z = float(robot.data.root_pos_w[0, 2])
-            target_z = float(hop_command.drop_z[0])
-            apex_height = apex_z - env_origin_z
-            target_height = target_z - env_origin_z
-            command_height = float(hop_command.peak_height[0])
+            apex_height = float(robot.data.root_pos_w[0, 2])
+            target_height = float(hop_command.target_z[0])
+            drop_height = float(hop_command.drop_z[0])
             error = apex_height - target_height
             print(
                 f"[APEX {apex_count:04d}] height={apex_height:.3f} m, target={target_height:.3f} m, "
-                f"error={error:+.3f} m (z={apex_z:.3f} m, target_z={target_z:.3f} m, "
-                f"command={command_height:.3f} m)",
+                f"drop={drop_height:.3f} m, error={error:+.3f} m",
                 flush=True,
             )
 

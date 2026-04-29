@@ -7,6 +7,7 @@ import torch
 from isaaclab.assets import Articulation
 from isaaclab.managers import ManagerTermBase, RewardTermCfg, SceneEntityCfg
 from isaaclab.sensors import ContactSensor
+from isaaclab.utils.math import wrap_to_pi
 from isaaclab.utils.string import resolve_matching_names_values
 
 if TYPE_CHECKING:
@@ -129,13 +130,47 @@ class track_air_time(ManagerTermBase):
         return fire.float() * torch.exp(-torch.square(err / std))
 
 
+class in_place_xy_yaw_l2(ManagerTermBase):
+    """Penalty for drifting away from the reset xy position and reset yaw."""
+
+    def __init__(self, cfg: RewardTermCfg, env: ManagerBasedRLEnv):
+        super().__init__(cfg, env)
+        asset_cfg: SceneEntityCfg = cfg.params.get("asset_cfg", SceneEntityCfg("robot"))
+        self._asset_name = asset_cfg.name
+        self._xy0 = torch.zeros(env.num_envs, 2, device=env.device)
+        self._yaw0 = torch.zeros(env.num_envs, device=env.device)
+        self.reset()
+
+    def __call__(
+        self,
+        env: ManagerBasedRLEnv,
+        xy_std: float,
+        yaw_std: float,
+        asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+    ) -> torch.Tensor:
+        del asset_cfg  # resolved in __init__
+        asset: Articulation = env.scene[self._asset_name]
+        xy_error = asset.data.root_pos_w[:, :2] - self._xy0
+        yaw_error = wrap_to_pi(asset.data.heading_w - self._yaw0)
+        return torch.sum(torch.square(xy_error / xy_std), dim=1) + torch.square(yaw_error / yaw_std)
+
+    def reset(self, env_ids=None):
+        asset: Articulation = self._env.scene[self._asset_name]
+        if env_ids is None:
+            self._xy0.copy_(asset.data.root_pos_w[:, :2])
+            self._yaw0.copy_(asset.data.heading_w)
+        else:
+            self._xy0[env_ids] = asset.data.root_pos_w[env_ids, :2]
+            self._yaw0[env_ids] = asset.data.heading_w[env_ids]
+
+
 class rebounce_height_tracking_exp(ManagerTermBase):
     """One-step reward at each rebound apex.
 
-    The target is not "jump higher forever"; it is "recover to the reset
-    height". The reward fires on the upward-to-non-upward velocity transition
+    The target is not "jump higher forever"; it is "reach the commanded
+    apex height". The reward fires on the upward-to-non-upward velocity transition
     after the robot has first descended and then rebounded, with value
-    ``exp(-((apex_z - drop_z) / std)^2)`` multiplied by a flat-orientation
+    ``exp(-((apex_z - target_z) / std)^2)`` multiplied by a flat-orientation
     gate and a foot-clearance gate, so standing/rearing up cannot satisfy the
     height objective.
     """
@@ -185,7 +220,7 @@ class rebounce_height_tracking_exp(ManagerTermBase):
         foot_reward = _feet_clearance_gate(
             env, foot_asset, self._foot_body_ids, foot_clearance, foot_clearance_softness, surface_z
         )
-        height_error = torch.abs(robot.data.root_pos_w[:, 2] - cmd.drop_z)
+        height_error = torch.abs(robot.data.root_pos_w[:, 2] - cmd.target_z)
         self._apex_armed = self._apex_armed & ~apex
         return apex.float() * torch.exp(-torch.square(height_error / std)) * orientation_reward * foot_reward
 
@@ -209,7 +244,7 @@ def rebounce_height_progress_exp(
     surface_z: float = 0.0,
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
 ) -> torch.Tensor:
-    """Dense shaping during rebound ascent toward the reset height while flat and airborne."""
+    """Dense shaping during rebound ascent toward the target height while flat and airborne."""
     cmd = env.command_manager.get_term(command_name)
     asset: Articulation = env.scene[asset_cfg.name]
     orientation_error = torch.sum(torch.square(asset.data.projected_gravity_b[:, :2]), dim=1)
@@ -218,7 +253,7 @@ def rebounce_height_progress_exp(
     foot_reward = _feet_clearance_gate(
         env, foot_asset, foot_asset_cfg.body_ids, foot_clearance, foot_clearance_softness, surface_z
     )
-    height_error = torch.abs(asset.data.root_pos_w[:, 2] - cmd.drop_z)
+    height_error = torch.abs(asset.data.root_pos_w[:, 2] - cmd.target_z)
     return cmd.has_rebounded.float() * torch.exp(-torch.square(height_error / std)) * orientation_reward * foot_reward
 
 

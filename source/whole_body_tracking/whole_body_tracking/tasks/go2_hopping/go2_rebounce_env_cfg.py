@@ -53,6 +53,7 @@ VELOCITY_RANGE = {
     "pitch": (-0.52, 0.52),
     "yaw": (-0.78, 0.78),
 }
+REBOUNCE_HEIGHT_RANGE = (0.5, 0.8)
 
 GO2_HOPPING_CFG = get_go2_cfg(
     spawn=get_go2_spawn_cfg(
@@ -119,12 +120,12 @@ class CommandsCfg:
         foot_clearance=0.08,
         surface_z=0.0,
         apex_height_tolerance=0.25,
-        # Resample only on env reset. A very large range disables mid-episode
-        # resampling so the same height target is used across all bounces in
-        # one rollout.
-        resampling_time_range=(1.0e9, 1.0e9),
+        # Initial target is sampled by the reset event so it can be decoupled
+        # from the initial drop height. During a 20 s rollout, resample the
+        # target at most about once to test command adaptation.
+        resampling_time_range=(10.0, 20.0),
         ranges=mdp.UniformRebounceCommandCfg.Ranges(
-            peak_height=(0.5, 0.8),
+            peak_height=REBOUNCE_HEIGHT_RANGE,
         ),
     )
 
@@ -148,8 +149,11 @@ class ObservationsCfg:
 
         # observation terms (order preserved)
         hop_command = ObsTerm(func=mdp.generated_commands, params={"command_name": "hop"})
+        base_pos = ObsTerm(func=mdp.root_pos_w, noise=Unoise(n_min=-0.05, n_max=0.05))
+        base_quat = ObsTerm(func=mdp.root_quat_w,params={"make_quat_unique": True})
+        # projected_gravity = ObsTerm(func=mdp.projected_gravity, noise=Unoise(n_min=-0.05, n_max=0.05))
+        base_lin_vel = ObsTerm(func=mdp.base_lin_vel, noise=Unoise(n_min=-0.2, n_max=0.2))
         base_ang_vel = ObsTerm(func=mdp.base_ang_vel, noise=Unoise(n_min=-0.2, n_max=0.2))
-        projected_gravity = ObsTerm(func=mdp.projected_gravity, noise=Unoise(n_min=-0.05, n_max=0.05))
         joint_pos = ObsTerm(func=mdp.joint_pos_rel, noise=Unoise(n_min=-0.01, n_max=0.01))
         joint_vel = ObsTerm(func=mdp.joint_vel_rel, noise=Unoise(n_min=-0.5, n_max=0.5))
         actions = ObsTerm(func=mdp.last_action)
@@ -160,8 +164,8 @@ class ObservationsCfg:
 
     @configclass
     class PrivilegedCfg(PolicyCfg):
-        base_pos = ObsTerm(func=mdp.root_pos_w)
-        base_lin_vel = ObsTerm(func=mdp.base_lin_vel)
+        # base_pos = ObsTerm(func=mdp.root_pos_w)
+        # base_lin_vel = ObsTerm(func=mdp.base_lin_vel)
 
         def __post_init__(self):
             super().__post_init__()
@@ -190,9 +194,9 @@ class EventCfg:
         },
     )
 
-    # reset — rebounce: teleport robot to (env_origin_x, env_origin_y,
-    # drop_z_offset + h_cmd) with zero velocity and default joint pose, and
-    # write the sampled h_cmd into the rebounce command's per-env target.
+    # reset — rebounce: sample target apex height and initial drop height
+    # independently, teleport robot to the drop height with zero velocity and
+    # default joint pose, and write the sampled target into the command buffer.
     reset_drop = EventTerm(
         func=mdp.reset_drop_from_height,
         mode="reset",
@@ -200,6 +204,7 @@ class EventCfg:
             "command_name": "hop",
             "asset_cfg": SceneEntityCfg("robot"),
             "drop_z_offset": 0.0,
+            "drop_height_range": REBOUNCE_HEIGHT_RANGE,
         },
     )
 
@@ -249,6 +254,15 @@ class RewardsCfg:
         },
     )
     flat_orientation = RewTerm(func=mdp.flat_orientation_l2, weight=-2.0)
+    in_place_xy_yaw = RewTerm(
+        func=mdp.in_place_xy_yaw_l2,
+        weight=-0.5,
+        params={
+            "asset_cfg": SceneEntityCfg("robot"),
+            "xy_std": 0.25,
+            "yaw_std": 0.5,
+        },
+    )
     action_rate_l2 = RewTerm(func=mdp.action_rate_l2, weight=-1e-2)
     joint_deviation_l1 = RewTerm(
         func=mdp.joint_deviation_l1,
@@ -341,7 +355,8 @@ class Go2RebounceEnvCfg(ManagerBasedRLEnvCfg):
         self.viewer.body_name = None
 
     def apply_play_overrides(self):
-        self.commands.hop.ranges.peak_height = (0.5, 0.8)
+        self.commands.hop.ranges.peak_height = REBOUNCE_HEIGHT_RANGE
+        self.events.reset_drop.params["drop_height_range"] = REBOUNCE_HEIGHT_RANGE
         return self
 
 

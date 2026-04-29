@@ -13,15 +13,19 @@
 \section{Current Task}
 
 The current task is continuous rebounce control for Go2. At reset, each
-environment samples a scalar height command
+environment samples a scalar target apex-height command
 \begin{equation}
     h^{*} \sim \mathcal{U}(0.5, 0.8)\ \mathrm{m},
 \end{equation}
-then places the robot base at the corresponding height with zero root velocity
-and the default joint state. The policy must keep rebounding for the full
-episode. The objective is not to jump higher forever, but to make each rebound
-apex return close to the reset/drop height while maintaining a flat quadruped
-posture.
+and independently samples the initial drop height
+\begin{equation}
+    h_{\mathrm{drop}} \sim \mathcal{U}(0.5, 0.8)\ \mathrm{m}.
+\end{equation}
+The robot base is placed at $h_{\mathrm{drop}}$ with zero root velocity and the
+default joint state. The policy must keep rebounding for the full episode. The
+objective is not to jump higher forever, nor merely to recover to the initial
+release height, but to make each rebound apex return close to the commanded
+target height while maintaining a flat quadruped posture and staying in place.
 
 Unlike the earlier single-rebounce setup, reaching an apex is no longer a
 termination condition. The episode continues until either a failure condition is
@@ -75,18 +79,33 @@ The rebounce command is
 \begin{equation}
     \bm{c} = [h^{*}].
 \end{equation}
-In the current baseline, the reset height and the target rebound-apex height are
-the same scalar. The reset event writes $h^{*}$ into the command buffer and sets
-the root state to
+In the current setup, the target rebound-apex height and the initial drop height
+are sampled independently from the same range:
+\begin{equation}
+    h^{*} \sim \mathcal{U}(0.5,0.8),
+    \qquad
+    h_{\mathrm{drop}} \sim \mathcal{U}(0.5,0.8).
+\end{equation}
+The reset event writes $h^{*}$ into the command buffer and sets the root state
+to
 \begin{equation}
     \bm{p}_{\mathrm{root}} =
     \bm{o}_{\mathrm{env}} +
-    \left[p_x^0,\ p_y^0,\ h^{*}+z_{\mathrm{offset}}\right],
+    \left[p_x^0,\ p_y^0,\ h_{\mathrm{drop}}+z_{\mathrm{offset}}\right],
     \qquad
     \bm{v}_{\mathrm{root}}=\bm{0},
 \end{equation}
 where $z_{\mathrm{offset}}=0$ in the current config. Joint positions are reset to
 the default Go2 pose and joint velocities are reset to zero.
+
+During the rollout, the target command is resampled after
+\begin{equation}
+    t_{\mathrm{resample}} \sim \mathcal{U}(10,20)\ \mathrm{s}.
+\end{equation}
+This changes only $h^{*}$ and therefore $z^{*}$; it does not teleport the robot
+or change the latched initial drop height $z_0$. With a $20$ s episode, most
+rollouts see zero or one mid-episode target change, which is enough to test
+adaptation without turning the task into rapid command following.
 
 The command term stores the following buffers:
 \begin{center}
@@ -95,6 +114,7 @@ The command term stores the following buffers:
 Symbol & Buffer & Meaning \\
 \hline
 $h^{*}$ & \texttt{peak\_height} & commanded target height \\
+$z^{*}$ & \texttt{target\_z} & world-frame commanded target apex height \\
 $z_0$ & \texttt{drop\_z} & root height latched after reset \\
 $z_{\max}$ & \texttt{peak\_z} & running root max during rebound ascent \\
 $b_{\downarrow}$ & \texttt{has\_descended} & root has had negative vertical velocity \\
@@ -169,10 +189,10 @@ Metric & Condition & Interpretation \\
 \hline
 \texttt{apex\_count} & $b^{\mathrm{apex}}_t$ & physical airborne apex count \\
 \texttt{target\_apex\_count} &
-$b^{\mathrm{apex}}_t \wedge |z_t-z_0|<0.25$ &
+$b^{\mathrm{apex}}_t \wedge |z_t-z^{*}|<0.25$ &
 apex count close to target height \\
 \texttt{error\_peak\_height} &
-mean $|z_t-z_0|$ over counted apexes &
+mean $|z_t-z^{*}|$ over counted apexes &
 height tracking error \\
 \hline
 \end{tabular}
@@ -209,6 +229,7 @@ The weighted reward is
         +5\,r^{\mathrm{progress}}_t
         +50\,r^{\mathrm{apex}}_t \\
         &-2\,r^{\mathrm{orient}}_t
+        -0.5\,r^{\mathrm{inplace}}_t
         -10^{-2}\,r^{\mathrm{action}}_t
         -0.05\,r^{\mathrm{joint}}_t
         -10\,r^{\mathrm{limit}}_t
@@ -234,7 +255,7 @@ penalized by \texttt{failed\_timeout}.
 
 Let
 \begin{equation}
-    e^z_t = |z^{w}_{\mathrm{root},t} - z_0|.
+    e^z_t = |z^{w}_{\mathrm{root},t} - z^{*}|.
 \end{equation}
 The flat-body gate is
 \begin{equation}
@@ -271,7 +292,18 @@ The apex pulse reward is
     g^{\mathrm{feet}}_t.
 \end{equation}
 The remaining penalties are standard orientation, action-rate, joint-deviation,
-and joint-position-limit regularizers.
+and joint-position-limit regularizers. The in-place term penalizes drift from
+the reset xy position and reset yaw:
+\begin{equation}
+    r^{\mathrm{inplace}}_t =
+    \left\lVert
+        \frac{\bm{p}_{xy,t}-\bm{p}_{xy,0}}{0.25}
+    \right\rVert^2
+    +
+    \left(
+        \frac{\mathrm{wrap}(\psi_t-\psi_0)}{0.5}
+    \right)^2.
+\end{equation}
 
 \paragraph{Reward scale.}
 In the current $20$ s setup, a single perfect apex pulse contributes
@@ -308,7 +340,7 @@ File & Purpose \\
 The experiment order should separate task-definition changes from style,
 efficiency, and final ablations.
 
-\subsection{Step 0: Freeze the Current Baseline}
+\subsection{Step 0: Freeze the Current Continuous-Rebounce Baseline}
 
 First train and save a clean baseline with the current config. Record the git
 state, run ID, checkpoint, and videos. The expected healthy indicators are:
@@ -322,65 +354,161 @@ state, run ID, checkpoint, and videos. The expected healthy indicators are:
 
 \subsection{Step 1: Decouple Initial Drop Height from Target Apex Height}
 
-The current baseline uses
-\[
-    h_{\mathrm{drop}} = h^{*}.
-\]
-The first task-definition experiment should decouple them:
+This has been implemented in the current setup. The target height and the
+initial release height are no longer the same sampled scalar:
 \[
     h^{*} \sim \mathcal{U}(0.5,0.8), \qquad
-    h_{\mathrm{drop}} = h^{*} + \epsilon.
+    h_{\mathrm{drop}} \sim \mathcal{U}(0.5,0.8).
 \]
-Start with a small offset
-\[
-    \epsilon \sim \mathcal{U}(-0.1,0.1)\ \mathrm{m},
-\]
-then increase the range or sample the two heights independently if the policy
-remains stable. This tests whether the policy controls rebound height, rather
-than only recovering to the height from which it was dropped.
+The height rewards and metrics now compare apex height against $h^{*}$ rather
+than against $h_{\mathrm{drop}}$. This tests whether the policy controls
+rebound height, rather than only recovering to the height from which it was
+dropped.
 
 \subsection{Step 2: Add In-Place Hopping}
 
-After the height task is fixed, add penalties or tracking terms for horizontal
-and yaw drift. Suggested diagnostics are
+This has also been implemented in the current setup with a small dense penalty
+on displacement from the reset xy position and reset yaw. Suggested diagnostics
+for the run are
 \[
     \lVert \bm{p}_{xy,t}-\bm{p}_{xy,0}\rVert,\qquad
     \lVert \bm{v}_{xy,t}\rVert,\qquad
     |\psi_t-\psi_0|,\qquad
     |\dot{\psi}_t|.
 \]
-Start with small weights so vertical rebounce quality is not suppressed. The
-goal is to keep the robot rebounding in place without sacrificing apex-height
-tracking.
+The current weight is intentionally modest so vertical rebounce quality is not
+suppressed. The goal is to keep the robot rebounding in place without
+sacrificing apex-height tracking.
 
-\subsection{Step 3: Regulate Leg Motion in Flight}
+\subsection{Step 3: Minimal Leg-Motion Regulation}
 
-The current policy can show fast leg motion in the air. Test the following
-regularization variants one at a time:
+Before optimizing energy, first remove obvious high-frequency or visually
+unacceptable leg motion. This should be a light regulation pass, not a strong
+posture-imitation objective. The goal is to prevent wasted actuator motion and
+unsafe leg swings while still allowing the robot to shape its body and legs to
+use the trampoline.
+
+Test the following regularization variants one at a time:
 \begin{enumerate}
     \item increase \texttt{joint\_deviation\_l1} weight, e.g.
-    $-0.05 \rightarrow -0.10 \rightarrow -0.20$;
-    \item add a joint-velocity penalty, starting from a small weight;
+    $-0.05 \rightarrow -0.10$ first; avoid jumping immediately to a strong
+    posture penalty because it can suppress useful trampoline-exploitation
+    strategies;
+    \item add a small joint-velocity penalty to reduce fast flight leg motion;
     \item reduce or reshape the foot-clearance gate to check whether the apex
     reward encourages spreading or lifting the feet near the apex.
 \end{enumerate}
-This step should be done before energy optimization so the source of the flight
-leg motion is identifiable.
+This step should be done before energy optimization so that the energy term is
+not merely compensating for a leg-motion artifact. After each variant, check
+\texttt{target\_apex\_count}, \texttt{error\_peak\_height}, in-place drift, and
+videos. If height tracking or survival degrades, the regularization is too
+strong.
 
-\subsection{Step 4: Add Energy Optimization}
+\subsection{Step 4: Add Energy Optimization on a Fixed Trampoline}
 
-Only after the behavior is stable and visually acceptable, add energy terms.
-Candidate penalties are
+Only after the behavior is stable and visually acceptable, add energy terms on
+the fixed trampoline. Keeping trampoline parameters fixed during this step
+isolates the question: can the policy maintain commanded apex height with less
+active work by using the trampoline's passive energy storage?
+
+Two mechanical-work penalties should be tested:
 \[
-    \sum_j \tau_{j,t}^{2}
-    \qquad\text{or}\qquad
+    r^{\mathrm{pos\_work}}_t =
+    \sum_j \max(\tau_{j,t}\dot{q}_{j,t}, 0),
+    \qquad
+    r^{\mathrm{abs\_work}}_t =
     \sum_j |\tau_{j,t}\dot{q}_{j,t}|.
 \]
-Use small weights and monitor \texttt{target\_apex\_count},
-\texttt{error\_peak\_height}, and \texttt{time\_out}. If energy decreases but
-height tracking or survival degrades, the weight is too large.
+The positive-work term penalizes active mechanical energy injected by the
+motors:
+\[
+    \tau_{j,t}\dot{q}_{j,t} > 0.
+\]
+It is the preferred first test because it discourages the robot from actively
+``kicking'' to create apex height while still allowing negative work for
+landing stabilization. The absolute-work term penalizes both positive and
+negative mechanical work, so it also discourages active braking:
+\[
+    r^{\mathrm{abs\_work}}_t
+    =
+    r^{\mathrm{pos\_work}}_t
+    +
+    \sum_j \max(-\tau_{j,t}\dot{q}_{j,t},0).
+\]
+It should be tested after the positive-work variant, or with a much smaller
+weight, because too much absolute-work penalty can reduce useful damping and
+postural stabilization during trampoline compression.
 
-\subsection{Step 5: Final Ablation Experiments}
+A torque-squared term,
+\[
+    \sum_j \tau_{j,t}^{2},
+\]
+is also useful as a regularizer, but it mainly discourages large torques rather
+than directly measuring active mechanical work.
+
+Use a small weight or a curriculum that turns on the energy penalty only after
+the policy already achieves stable rebounce. Keep the height and survival terms
+dominant. If energy decreases while \texttt{target\_apex\_count},
+\texttt{error\_peak\_height}, or \texttt{time\_out} degrades, the energy weight
+is too large or was introduced too early. Log positive work, negative work,
+absolute work, and torque norm separately; a low positive-work policy with high
+negative work may simply be absorbing trampoline energy through active braking
+rather than using the trampoline efficiently.
+
+\subsection{Step 5: Add Trampoline Parameter Randomization}
+
+After the energy-optimized policy works on the fixed trampoline, introduce
+trampoline randomization. The code path already contains a reset event for
+trampoline material and mass randomization, but the current ranges are fixed:
+\[
+    E \sim \mathcal{U}(8.0\times 10^4, 8.0\times 10^4),
+    \qquad
+    m \sim \mathcal{U}(10,10).
+\]
+Thus the current setup behaves as a fixed-trampoline experiment.
+
+Start with narrow ranges around the fixed value, then widen them:
+\[
+    E \sim \mathcal{U}(0.8E_0,1.2E_0),
+    \qquad
+    m \sim \mathcal{U}(0.8m_0,1.2m_0),
+\]
+and later test wider ranges if the behavior remains stable. Randomizing too
+early can make it difficult to tell whether a behavior change came from energy
+optimization, leg regulation, or trampoline dynamics. It can also encourage a
+more conservative active-jumping strategy that is robust but less clearly
+trampoline-efficient.
+
+To make different trampoline dynamics visible in evaluation, run fixed
+evaluation sweeps over several discrete trampoline settings instead of relying
+only on random training averages. For each setting, compare height error,
+apex count, time-out rate, motor positive work, torque norm, contact/stance
+duration, and videos. A useful result should show that the policy adapts its
+timing, leg motion, and motor work across soft and stiff trampolines while
+maintaining the same commanded apex-height objective.
+
+\subsection{TODO: Real-Robot Observation Noise Measurement}
+
+Before finalizing sim-to-real observation corruption, measure the observation
+noise on the physical robot and use the measured ranges to set the policy
+observation noise. The required measurements are:
+\begin{itemize}
+    \item joint position noise from the robot encoder readings;
+    \item joint velocity noise from the robot state estimator or finite
+    differences of encoder readings;
+    \item IMU angular velocity noise for the base angular-velocity observation;
+    \item mocap or state-estimator base position noise;
+    \item mocap or state-estimator base linear-velocity noise.
+\end{itemize}
+
+For each signal, record at least a static standing segment and a representative
+rebounce or hopping segment. Estimate bias, standard deviation, outliers,
+latency, and any filtering delay. The resulting noise magnitudes should be used
+to update the observation corruption in \texttt{go2\_rebounce\_env\_cfg.py},
+especially for joint position, joint velocity, base angular velocity, base
+position, and base linear velocity.
+
+\subsection{Step 6: Final Ablation Experiments}
 
 Run formal ablations after the final task definition is stable. Suggested
 variants are:
@@ -396,26 +524,33 @@ No foot gate & remove foot-clearance gates & does it prevent standing or foot ex
 No in-place reward & remove $xy/yaw$ terms & does the policy drift? \\
 No regulation & remove flight-leg regulation & does leg motion return? \\
 No energy reward & remove energy term & efficiency versus performance \\
+No trampoline DR & fix trampoline parameters & robustness versus specialization \\
 \hline
 \end{tabular}
 \end{center}
 
 For every variant, compare success rate, failure distribution, height error,
-apex count, target-apex count, drift metrics, energy, and videos.
+apex count, target-apex count, drift metrics, energy, trampoline setting, and
+videos.
 
 \section{Recommended Order}
 
 The recommended order is:
 \begin{enumerate}
-    \item freeze the current continuous-rebounce baseline;
-    \item decouple drop height and target height;
-    \item add in-place constraints;
-    \item regulate flight leg motion;
-    \item add energy optimization;
+    \item freeze the current setup with independent drop/target heights and
+    in-place constraints;
+    \item add only minimal leg-motion regulation needed to remove artifacts;
+    \item add energy optimization on the fixed trampoline;
+    \item add trampoline parameter randomization and evaluate discrete
+    trampoline settings;
+    \item measure real-robot observation noise and update observation
+    corruption;
     \item run final ablations.
 \end{enumerate}
 
-This order first fixes the task definition, then the motion style, then
-efficiency, and only then performs explanatory ablations.
+This order freezes the updated task definition first, removes obvious motion
+artifacts, optimizes active motor energy on a known trampoline, then tests
+robustness and adaptation across trampoline dynamics before final explanatory
+ablations.
 
 \end{document}

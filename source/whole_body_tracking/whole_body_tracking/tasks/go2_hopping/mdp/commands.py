@@ -242,9 +242,9 @@ class UniformRebounceCommand(CommandTerm):
     """Per-env scalar ``peak_height`` target for the rebounce task.
 
     On each env reset, samples ``h_cmd ~ U(ranges.peak_height)`` and latches
-    ``drop_z = base_z`` after the reset event teleports the robot to its drop
-    height. Tracks periodic drop/rebound/apex state so rewards can fire once
-    per airborne apex while the episode continues.
+    ``drop_z = base_z`` after the reset event teleports the robot to its
+    independently sampled drop height. Tracks periodic drop/rebound/apex state
+    so rewards can fire once per airborne apex while the episode continues.
 
     Unlike :class:`UniformHoppingCommand`, this class does **not** depend on
     the contact sensor: rebounce semantics are encoded by root vertical
@@ -268,7 +268,7 @@ class UniformRebounceCommand(CommandTerm):
         # ascent** — i.e. timesteps where the robot has already descended
         # (vz < 0 at some prior step) and is now moving upward (vz > 0). This
         # excludes the initial drop_z so a weak bounce that fails to recover
-        # the drop height is correctly reported as ``realized_peak_height < 0``.
+        # toward the target height is not hidden by the reset state.
         self._peak_z = torch.zeros(n, device=dev)
         self._drop_z = torch.zeros(n, device=dev)
         self._has_descended = torch.zeros(n, dtype=torch.bool, device=dev)
@@ -299,12 +299,16 @@ class UniformRebounceCommand(CommandTerm):
         return self._drop_z
 
     @property
+    def target_z(self) -> torch.Tensor:
+        return self._env.scene.env_origins[:, 2] + self._peak_h_target
+
+    @property
     def realized_peak_height(self) -> torch.Tensor:
-        return self._peak_z - self._drop_z
+        return self._peak_z - self._env.scene.env_origins[:, 2]
 
     @property
     def rebound_height_error(self) -> torch.Tensor:
-        return torch.abs(self._peak_z - self._drop_z)
+        return torch.abs(self._peak_z - self.target_z)
 
     @property
     def has_descended(self) -> torch.Tensor:
@@ -336,7 +340,7 @@ class UniformRebounceCommand(CommandTerm):
         return min_foot_z > threshold, min_foot_z <= threshold
 
     def _target_apex(self, airborne_apex: torch.Tensor, z: torch.Tensor) -> torch.Tensor:
-        height_ok = torch.abs(z - self._drop_z) < self.cfg.apex_height_tolerance
+        height_ok = torch.abs(z - self.target_z) < self.cfg.apex_height_tolerance
         return airborne_apex & height_ok
 
     def _update_metrics(self):
@@ -358,7 +362,7 @@ class UniformRebounceCommand(CommandTerm):
             torch.maximum(self._peak_z, z),
             self._peak_z,
         )
-        apex_error = torch.abs(z - self._drop_z)
+        apex_error = torch.abs(z - self.target_z)
         new_apex_count = torch.where(airborne_apex, self._apex_count + 1.0, self._apex_count)
         self.metrics["error_peak_height"] = torch.where(
             airborne_apex,
@@ -381,11 +385,25 @@ class UniformRebounceCommand(CommandTerm):
         self._prev_vz = vz.clone()
 
     def _resample_command(self, env_ids: Sequence[int]):
-        # h_cmd is sampled and written by the ``reset_drop_from_height`` event,
-        # which runs before ``command_manager.reset()`` and is responsible for
-        # both the drop pose and the per-env target. This keeps the two values
-        # aligned without requiring a chicken-and-egg ordering hack.
-        del env_ids
+        # On env reset, ``reset_drop_from_height`` has already sampled and
+        # written the initial target before ``command_manager.reset()`` calls
+        # this method. Preserve that reset-time target, but allow normal
+        # mid-episode command resampling afterward.
+        if isinstance(env_ids, slice):
+            ids = torch.arange(self.num_envs, device=self.device)[env_ids]
+        elif isinstance(env_ids, torch.Tensor):
+            ids = env_ids.to(device=self.device)
+        else:
+            ids = torch.tensor(env_ids, device=self.device, dtype=torch.long)
+
+        resample_ids = ids[self.command_counter[ids] > 0]
+        if len(resample_ids) == 0:
+            return
+
+        r = self.cfg.ranges
+        self._peak_h_target[resample_ids] = torch.empty(len(resample_ids), device=self.device).uniform_(
+            *r.peak_height
+        )
 
     def _update_command(self):
         pass
