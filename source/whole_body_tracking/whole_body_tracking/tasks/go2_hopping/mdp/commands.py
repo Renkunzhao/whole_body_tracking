@@ -413,3 +413,193 @@ class UniformRebounceCommandCfg(CommandTermCfg):
         peak_height: tuple[float, float] = MISSING
 
     ranges: Ranges = MISSING
+
+
+class EnergyMetricsCommand(CommandTerm):
+    """Track motor mechanical work for the rebounce task."""
+
+    cfg: EnergyMetricsCommandCfg
+
+    def __init__(self, cfg: EnergyMetricsCommandCfg, env: ManagerBasedRLEnv):
+        super().__init__(cfg, env)
+        cfg.asset_cfg.resolve(env.scene)
+        self.robot: Articulation = env.scene[cfg.asset_cfg.name]
+        self._joint_ids = cfg.asset_cfg.joint_ids
+
+        n, dev = self.num_envs, self.device
+        self._command = torch.zeros(n, 1, device=dev)
+        self._positive_power = torch.zeros(n, device=dev)
+        self._negative_power = torch.zeros(n, device=dev)
+        self._absolute_power = torch.zeros(n, device=dev)
+
+        self._negative_work = torch.zeros(n, device=dev)
+        self._absolute_work = torch.zeros(n, device=dev)
+        self._positive_interval_work = torch.zeros(n, device=dev)
+        self._absolute_interval_work = torch.zeros(n, device=dev)
+        self._apex_count = torch.zeros(n, device=dev)
+        self._positive_work_per_height = torch.zeros(n, device=dev)
+        self._absolute_work_per_height = torch.zeros(n, device=dev)
+        self._positive_work_per_height_pulse = torch.zeros(n, device=dev)
+        self._absolute_work_per_height_pulse = torch.zeros(n, device=dev)
+        self._positive_work_per_target_height_pulse = torch.zeros(n, device=dev)
+        self._absolute_work_per_target_height_pulse = torch.zeros(n, device=dev)
+
+        self.metrics["positive_work_per_height"] = torch.zeros(n, device=dev)
+        self.metrics["absolute_work_per_height"] = torch.zeros(n, device=dev)
+        self.metrics["braking_ratio"] = torch.zeros(n, device=dev)
+
+    @property
+    def command(self) -> torch.Tensor:
+        return self._command
+
+    @property
+    def positive_power(self) -> torch.Tensor:
+        return self._positive_power
+
+    @property
+    def negative_power(self) -> torch.Tensor:
+        return self._negative_power
+
+    @property
+    def absolute_power(self) -> torch.Tensor:
+        return self._absolute_power
+
+    def power(self, mode: str) -> torch.Tensor:
+        if mode == "positive":
+            return self._positive_power
+        if mode == "absolute":
+            return self._absolute_power
+        raise ValueError(f"Unsupported energy penalty mode: {mode!r}. Expected 'positive' or 'absolute'.")
+
+    def work_per_height_pulse(self, mode: str) -> torch.Tensor:
+        if mode == "positive":
+            return self._positive_work_per_height_pulse
+        if mode == "absolute":
+            return self._absolute_work_per_height_pulse
+        raise ValueError(f"Unsupported energy penalty mode: {mode!r}. Expected 'positive' or 'absolute'.")
+
+    def work_per_target_height_pulse(self, mode: str) -> torch.Tensor:
+        if mode == "positive":
+            return self._positive_work_per_target_height_pulse
+        if mode == "absolute":
+            return self._absolute_work_per_target_height_pulse
+        raise ValueError(f"Unsupported energy penalty mode: {mode!r}. Expected 'positive' or 'absolute'.")
+
+    def _update_metrics(self):
+        torque = self.robot.data.applied_torque[:, self._joint_ids]
+        joint_vel = self.robot.data.joint_vel[:, self._joint_ids]
+        joint_power = torque * joint_vel
+
+        self._positive_power = torch.sum(torch.clamp(joint_power, min=0.0), dim=1)
+        self._negative_power = torch.sum(torch.clamp(-joint_power, min=0.0), dim=1)
+        self._absolute_power = self._positive_power + self._negative_power
+
+        dt = self._env.step_dt
+        self._negative_work += self._negative_power * dt
+        self._absolute_work += self._absolute_power * dt
+        self._positive_interval_work += self._positive_power * dt
+        self._absolute_interval_work += self._absolute_power * dt
+
+        self._positive_work_per_height_pulse.zero_()
+        self._absolute_work_per_height_pulse.zero_()
+        self._positive_work_per_target_height_pulse.zero_()
+        self._absolute_work_per_target_height_pulse.zero_()
+
+        if self.cfg.apex_command_name is not None:
+            apex_cmd = self._env.command_manager.get_term(self.cfg.apex_command_name)
+            is_apex = apex_cmd.is_apex
+            is_apex_float = is_apex.float()
+            apex_height = apex_cmd.last_apex_height.clamp_min(1e-6)
+            target_height = apex_cmd.last_apex_target_height.clamp_min(1e-6)
+            self._positive_work_per_height_pulse = torch.where(
+                is_apex, self._positive_interval_work / apex_height, self._positive_work_per_height_pulse
+            )
+            self._absolute_work_per_height_pulse = torch.where(
+                is_apex, self._absolute_interval_work / apex_height, self._absolute_work_per_height_pulse
+            )
+            self._positive_work_per_target_height_pulse = torch.where(
+                is_apex,
+                self._positive_interval_work / target_height,
+                self._positive_work_per_target_height_pulse,
+            )
+            self._absolute_work_per_target_height_pulse = torch.where(
+                is_apex,
+                self._absolute_interval_work / target_height,
+                self._absolute_work_per_target_height_pulse,
+            )
+            self._positive_interval_work = torch.where(
+                is_apex, torch.zeros_like(self._positive_interval_work), self._positive_interval_work
+            )
+            self._absolute_interval_work = torch.where(
+                is_apex, torch.zeros_like(self._absolute_interval_work), self._absolute_interval_work
+            )
+            new_apex_count = self._apex_count + is_apex_float
+            self._positive_work_per_height = torch.where(
+                is_apex,
+                self._positive_work_per_height
+                + (self._positive_work_per_height_pulse - self._positive_work_per_height)
+                / new_apex_count.clamp_min(1.0),
+                self._positive_work_per_height,
+            )
+            self._absolute_work_per_height = torch.where(
+                is_apex,
+                self._absolute_work_per_height
+                + (self._absolute_work_per_height_pulse - self._absolute_work_per_height)
+                / new_apex_count.clamp_min(1.0),
+                self._absolute_work_per_height,
+            )
+            self._apex_count = new_apex_count
+
+        self.metrics["positive_work_per_height"][:] = self._positive_work_per_height
+        self.metrics["absolute_work_per_height"][:] = self._absolute_work_per_height
+        self.metrics["braking_ratio"][:] = self._negative_work / self._absolute_work.clamp_min(1e-6)
+
+    def _resample_command(self, env_ids: Sequence[int]):
+        pass
+
+    def _update_command(self):
+        pass
+
+    def reset(self, env_ids: Sequence[int] | None = None) -> dict[str, float]:
+        extras = super().reset(env_ids)
+        if env_ids is None:
+            self._positive_power.zero_()
+            self._negative_power.zero_()
+            self._absolute_power.zero_()
+            self._negative_work.zero_()
+            self._absolute_work.zero_()
+            self._positive_interval_work.zero_()
+            self._absolute_interval_work.zero_()
+            self._apex_count.zero_()
+            self._positive_work_per_height.zero_()
+            self._absolute_work_per_height.zero_()
+            self._positive_work_per_height_pulse.zero_()
+            self._absolute_work_per_height_pulse.zero_()
+            self._positive_work_per_target_height_pulse.zero_()
+            self._absolute_work_per_target_height_pulse.zero_()
+        else:
+            self._positive_power[env_ids] = 0.0
+            self._negative_power[env_ids] = 0.0
+            self._absolute_power[env_ids] = 0.0
+            self._negative_work[env_ids] = 0.0
+            self._absolute_work[env_ids] = 0.0
+            self._positive_interval_work[env_ids] = 0.0
+            self._absolute_interval_work[env_ids] = 0.0
+            self._apex_count[env_ids] = 0.0
+            self._positive_work_per_height[env_ids] = 0.0
+            self._absolute_work_per_height[env_ids] = 0.0
+            self._positive_work_per_height_pulse[env_ids] = 0.0
+            self._absolute_work_per_height_pulse[env_ids] = 0.0
+            self._positive_work_per_target_height_pulse[env_ids] = 0.0
+            self._absolute_work_per_target_height_pulse[env_ids] = 0.0
+        return extras
+
+
+@configclass
+class EnergyMetricsCommandCfg(CommandTermCfg):
+    """Config for :class:`EnergyMetricsCommand`."""
+
+    class_type: type = EnergyMetricsCommand
+    resampling_time_range: tuple[float, float] = (1.0e9, 1.0e9)
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot", joint_names=[".*"])
+    apex_command_name: str | None = "hop"

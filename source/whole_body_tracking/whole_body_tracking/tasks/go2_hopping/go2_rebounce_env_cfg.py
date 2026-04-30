@@ -128,6 +128,10 @@ class CommandsCfg:
             peak_height=REBOUNCE_HEIGHT_RANGE,
         ),
     )
+    energy = mdp.EnergyMetricsCommandCfg(
+        asset_cfg=SceneEntityCfg("robot", joint_names=[".*"]),
+        apex_command_name="hop",
+    )
 
 
 @configclass
@@ -225,6 +229,14 @@ class RewardsCfg:
             "command_name": "hop",
             "std": 0.10,
             "orientation_std": 0.35,
+        },
+    )
+    energy_penalty = RewTerm(
+        func=mdp.joint_mechanical_energy_penalty,
+        weight=-2.5e-2,
+        params={
+            "command_name": "energy",
+            "mode": "positive",
         },
     )
     flat_orientation = RewTerm(func=mdp.flat_orientation_l2, weight=-2.0)

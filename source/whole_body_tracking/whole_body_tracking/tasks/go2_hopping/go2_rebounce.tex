@@ -130,17 +130,23 @@ The actor observation is
     \bm{o}^{\pi}_t =
     \left[
         h^{*},\,
+        \bm{p}^{w}_t,\,
+        \bm{q}^{w}_t,\,
+        \bm{v}^{b}_t,\,
         \bm{\omega}^{b}_t,\,
-        \bm{g}^{b}_t,\,
         \tilde{\bm{q}}_t,\,
         \tilde{\dot{\bm{q}}}_t,\,
         \bm{a}_{t-1}
     \right].
 \end{equation}
-The critic additionally observes world root position and base linear velocity.
-The policy action is a 12-DoF joint-position target action with the default Go2
-joint offset. In the trampoline variant, a separate action term keeps the
-trampoline rim pinned.
+Here $\bm{p}^{w}_t$ is the world root position, $\bm{q}^{w}_t$ is the unique
+world root quaternion, $\bm{v}^{b}_t$ is base linear velocity, and
+$\bm{\omega}^{b}_t$ is base angular velocity. The actor observation uses
+additive noise on root position, base linear velocity, base angular velocity,
+joint position, and joint velocity. The critic uses the same observation terms
+without corruption. The policy action is a 12-DoF joint-position target action
+with the default Go2 joint offset. In the trampoline variant, a separate action
+term keeps the trampoline rim pinned.
 
 \section{Apex Event and Metrics}
 
@@ -239,6 +245,7 @@ The weighted reward is
     R_t = \Delta t \Big(
         &-250\,r^{\mathrm{fail}}_t
         +50\,r^{\mathrm{apex}}_t \\
+        &-2.5\times10^{-2}\,r^{\mathrm{energy}}_t \\
         &-2\,r^{\mathrm{orient}}_t
         -0.5\,r^{\mathrm{inplace}}_t
         -10^{-2}\,r^{\mathrm{action}}_t
@@ -306,21 +313,26 @@ termination contributes approximately
     -250 \cdot 0.02 / 20 = -0.25
 \]
 for the environments where that failure happened, before averaging over all
-reset environments.
+reset environments. With the current energy weight, a typical sparse energy
+pulse of $W^{+}/h^{*}\approx 150$ contributes
+\[
+    -2.5\times10^{-2}\cdot150\cdot0.02/20 \approx -0.00375
+\]
+to the logged \texttt{Episode\_Reward/energy\_penalty} for one valid apex.
 
 \section{Implementation Files}
 
 \begin{center}
-\begin{tabular}{ll}
+\begin{tabular}{p{0.42\linewidth}p{0.46\linewidth}}
 \hline
 File & Purpose \\
 \hline
 \texttt{go2\_rebounce\_env\_cfg.py} & scene, reset, reward, termination config \\
-\texttt{mdp/commands.py} & rebounce command, apex metrics, re-arm state \\
+\texttt{mdp/commands.py} & rebounce command, apex metrics, re-arm state, energy metrics \\
 \texttt{mdp/events.py} & reset from sampled drop height \\
-\texttt{mdp/rewards.py} & height reward and failure pulses \\
+\texttt{mdp/rewards.py} & height reward, energy penalty, and failure pulses \\
 \texttt{mdp/terminations.py} & timeout-without-apex termination \\
-\texttt{scripts/rsl\_rl/play-rebounce.py} & play script with apex height printout \\
+\texttt{scripts/rsl\_rl/play-rebounce.py} & play script with apex height and energy printout \\
 \hline
 \end{tabular}
 \end{center}
@@ -390,9 +402,9 @@ Test the following regularization variants one at a time:
 \end{enumerate}
 This step should be done before energy optimization so that the energy term is
 not merely compensating for a leg-motion artifact. After each variant, check
-\texttt{target\_apex\_count}, \texttt{error\_peak\_height}, in-place drift, and
-videos. If height tracking or survival degrades, the regularization is too
-strong.
+\texttt{apex\_count}, \texttt{height\_matched\_apex\_count},
+\texttt{error\_peak\_height}, in-place drift, and videos. If height tracking or
+survival degrades, the regularization is too strong.
 
 \subsection{Step 4: Add Energy Optimization on a Fixed Trampoline}
 
@@ -401,13 +413,41 @@ the fixed trampoline. Keeping trampoline parameters fixed during this step
 isolates the question: can the policy maintain commanded apex height with less
 active work by using the trampoline's passive energy storage?
 
-Two mechanical-work penalties should be tested:
+Two mechanical-work definitions should be tested:
 \[
-    r^{\mathrm{pos\_work}}_t =
+    P^{+}_t =
     \sum_j \max(\tau_{j,t}\dot{q}_{j,t}, 0),
     \qquad
-    r^{\mathrm{abs\_work}}_t =
+    P^{\mathrm{abs}}_t =
     \sum_j |\tau_{j,t}\dot{q}_{j,t}|.
+\]
+The reward is sparse. Between two valid apex events, the energy command
+accumulates
+\[
+    W^{+}_k=\sum_{t\in k}P^{+}_t\Delta t,
+    \qquad
+    W^{\mathrm{abs}}_k=\sum_{t\in k}P^{\mathrm{abs}}_t\Delta t.
+\]
+At the next valid apex, the reward penalty is normalized by the commanded target
+height $h^{*}_k$:
+\[
+    c^{\mathrm{energy}}_k =
+    \frac{W_k}{\max(h^{*}_k,\epsilon)}.
+\]
+Using the target height for the reward prevents the policy from jumping higher
+than requested only to dilute the work-per-height penalty. The reported metrics
+below still use the achieved apex height, which keeps them interpretable as the
+actual work needed per meter of realized rebound height.
+
+The implementation exposes this through the \texttt{mode} parameter of
+\texttt{energy\_penalty} in \texttt{go2\_rebounce\_env\_cfg.py}. Set
+\texttt{mode=positive} for $W^{+}_k/h^{*}_k$ or
+\texttt{mode=absolute} for $W^{\mathrm{abs}}_k/h^{*}_k$. The raw reward follows
+the same convention as the apex-height pulse: Isaac Lab applies the global
+$\Delta t$ scaling, and the event scale is handled in the configured weight.
+With the current $\Delta t=0.02$ s, the current positive-work weight is
+\[
+    w_{\mathrm{energy}} = -2.5\times10^{-2}.
 \]
 The positive-work term penalizes active mechanical energy injected by the
 motors:
@@ -436,14 +476,39 @@ A torque-squared term,
 is also useful as a regularizer, but it mainly discourages large torques rather
 than directly measuring active mechanical work.
 
+The current positive-work run shows the intended first-order behavior: the
+logged \texttt{Episode\_Reward/energy\_penalty} is roughly $10\%$ of
+\texttt{Episode\_Reward/rebounce\_height}, the valid apex count increases, and
+\texttt{positive\_work\_per\_height} decreases. This indicates that the energy
+term is influencing the policy without dominating the height-tracking task.
+
 Use a small weight or a curriculum that turns on the energy penalty only after
 the policy already achieves stable rebounce. Keep the height and survival terms
-dominant. If energy decreases while \texttt{target\_apex\_count},
-\texttt{error\_peak\_height}, or \texttt{time\_out} degrades, the energy weight
-is too large or was introduced too early. Log positive work, negative work,
-absolute work, and torque norm separately; a low positive-work policy with high
-negative work may simply be absorbing trampoline energy through active braking
-rather than using the trampoline efficiently.
+dominant. If energy decreases while \texttt{apex\_count},
+\texttt{height\_matched\_apex\_count}, \texttt{error\_peak\_height}, or
+\texttt{time\_out} degrades, the energy weight is too large or was introduced
+too early. Compare policies with
+positive-work-per-height and absolute-work-per-height; use braking ratio as a
+diagnostic. A low positive-work policy with high braking ratio may simply be
+absorbing trampoline energy through active braking rather than using the
+trampoline efficiently.
+
+The energy command term logs:
+\begin{center}
+\scriptsize
+\begin{tabular}{p{0.42\linewidth}p{0.46\linewidth}}
+\hline
+Metric & Definition \\
+\hline
+\texttt{Metrics/energy/positive\_work\_per\_height} &
+mean over valid apexes of $W_k^{+}/h_k^{\mathrm{apex}}$ \\
+\texttt{Metrics/energy/absolute\_work\_per\_height} &
+mean over valid apexes of $W_k^{\mathrm{abs}}/h_k^{\mathrm{apex}}$ \\
+\texttt{Metrics/energy/braking\_ratio} &
+$W^{-}_{\mathrm{episode}}/\max(W^{\mathrm{abs}}_{\mathrm{episode}},\epsilon)$ \\
+\hline
+\end{tabular}
+\end{center}
 
 \subsection{Step 5: Add Trampoline Parameter Randomization}
 

@@ -186,6 +186,23 @@ class rebounce_height_tracking_exp(ManagerTermBase):
         return cmd.is_apex.float() * torch.exp(-torch.square(height_error / std)) * orientation_reward
 
 
+def joint_mechanical_energy_penalty(
+    env: ManagerBasedRLEnv,
+    command_name: str,
+    mode: str = "positive",
+) -> torch.Tensor:
+    """Sparse motor-work-per-height penalty from :class:`EnergyMetricsCommand`.
+
+    The command term emits a one-step pulse at each valid apex with work
+    accumulated since the previous apex divided by the commanded target apex
+    height. This keeps energy optimization from making the jump higher just to
+    dilute the work-per-height penalty. Isaac Lab applies the global reward
+    ``dt`` scaling.
+    """
+    energy_cmd = env.command_manager.get_term(command_name)
+    return energy_cmd.work_per_target_height_pulse(mode)
+
+
 class termination_term(ManagerTermBase):
     """Reward/penalty pulse for selected termination terms, including timeouts."""
 
