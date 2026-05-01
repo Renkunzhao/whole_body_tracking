@@ -151,10 +151,10 @@ class ObservationsCfg:
 
         # observation terms (order preserved)
         hop_command = ObsTerm(func=mdp.generated_commands, params={"command_name": "hop"})
-        base_pos = ObsTerm(func=mdp.root_pos_w, noise=Unoise(n_min=-0.05, n_max=0.05))
-        base_quat = ObsTerm(func=mdp.root_quat_w,params={"make_quat_unique": True})
-        # projected_gravity = ObsTerm(func=mdp.projected_gravity, noise=Unoise(n_min=-0.05, n_max=0.05))
-        base_lin_vel = ObsTerm(func=mdp.base_lin_vel, noise=Unoise(n_min=-0.2, n_max=0.2))
+        # base_pos = ObsTerm(func=mdp.root_pos_w, noise=Unoise(n_min=-0.05, n_max=0.05))
+        # base_quat = ObsTerm(func=mdp.root_quat_w,params={"make_quat_unique": True})
+        projected_gravity = ObsTerm(func=mdp.projected_gravity, noise=Unoise(n_min=-0.05, n_max=0.05))
+        # base_lin_vel = ObsTerm(func=mdp.base_lin_vel, noise=Unoise(n_min=-0.2, n_max=0.2))
         base_ang_vel = ObsTerm(func=mdp.base_ang_vel, noise=Unoise(n_min=-0.2, n_max=0.2))
         joint_pos = ObsTerm(func=mdp.joint_pos_rel, noise=Unoise(n_min=-0.01, n_max=0.01))
         joint_vel = ObsTerm(func=mdp.joint_vel_rel, noise=Unoise(n_min=-0.5, n_max=0.5))
@@ -166,8 +166,9 @@ class ObservationsCfg:
 
     @configclass
     class PrivilegedCfg(PolicyCfg):
-        # base_pos = ObsTerm(func=mdp.root_pos_w)
-        # base_lin_vel = ObsTerm(func=mdp.base_lin_vel)
+        base_pos = ObsTerm(func=mdp.root_pos_w)
+        base_quat = ObsTerm(func=mdp.root_quat_w,params={"make_quat_unique": True})
+        base_lin_vel = ObsTerm(func=mdp.base_lin_vel)
 
         def __post_init__(self):
             super().__post_init__()

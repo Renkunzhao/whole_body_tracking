@@ -125,9 +125,12 @@ $b^{\mathrm{apex}}$ & \texttt{is\_apex} & one-step valid-apex flag \\
 
 \section{Observations and Actions}
 
-The actor observation is
+Two actor-observation variants are kept for comparison.
+
+\paragraph{Full-state simulation observation.}
+The original full-state actor observation is
 \begin{equation}
-    \bm{o}^{\pi}_t =
+    \bm{o}^{\pi,\mathrm{full}}_t =
     \left[
         h^{*},\,
         \bm{p}^{w}_t,\,
@@ -141,10 +144,40 @@ The actor observation is
 \end{equation}
 Here $\bm{p}^{w}_t$ is the world root position, $\bm{q}^{w}_t$ is the unique
 world root quaternion, $\bm{v}^{b}_t$ is base linear velocity, and
-$\bm{\omega}^{b}_t$ is base angular velocity. The actor observation uses
-additive noise on root position, base linear velocity, base angular velocity,
-joint position, and joint velocity. The critic uses the same observation terms
-without corruption. The policy action is a 12-DoF joint-position target action
+$\bm{\omega}^{b}_t$ is base angular velocity. This variant is useful for
+simulation-only baselines and for quantifying how much full-state information
+helps MLP+DR.
+
+\paragraph{Hardware-realistic deployable observation.}
+The current deployable actor observation removes world root position, world
+root quaternion, and base linear velocity:
+\begin{equation}
+    \bm{o}^{\pi,\mathrm{deploy}}_t =
+    \left[
+        h^{*},\,
+        \bm{g}^{b}_t,\,
+        \bm{\omega}^{b}_t,\,
+        \tilde{\bm{q}}_t,\,
+        \tilde{\dot{\bm{q}}}_t,\,
+        \bm{a}_{t-1}
+    \right],
+\end{equation}
+where $\bm{g}^{b}_t$ is the projected gravity vector in the base frame. This
+observation is closer to what can be deployed without mocap: joint position,
+joint velocity, IMU-like projected gravity, IMU angular velocity, previous
+action, and the commanded target apex height. It intentionally does not expose
+absolute base height or vertical velocity to the actor.
+
+The deployable actor observation uses additive noise on projected gravity,
+base angular velocity, joint position, and joint velocity. The critic is
+asymmetric and keeps privileged full-state terms without corruption:
+\[
+    \bm{p}^{w}_t,\qquad
+    \bm{q}^{w}_t,\qquad
+    \bm{v}^{b}_t.
+\]
+Thus the critic can use full simulator state during training, while the actor
+remains deployable. The policy action is a 12-DoF joint-position target action
 with the default Go2 joint offset. In the trampoline variant, a separate action
 term keeps the trampoline rim pinned.
 
@@ -610,6 +643,106 @@ compromise. This creates the justification for the later methods: history,
 recurrence, or an RMA-style latent estimator should recover stiffness-dependent
 behavior while keeping the deployable actor free of privileged trampoline
 parameters.
+
+\paragraph{Preliminary fixed-condition result.}
+A first evaluation sweep compared two policies: a stiffness-randomized policy
+trained with
+\[
+    E\sim \mathrm{LogUniform}(4.0\times10^4,1.6\times10^5)
+\]
+and a fixed-trampoline policy trained only at
+$E=8.0\times10^4$, $m=10$ kg. Both policies were evaluated on fixed
+conditions
+\[
+    E\in\{4.0\times10^4,8.0\times10^4,1.6\times10^5\},
+    \qquad
+    h^*\in\{0.5,0.65,0.8\}.
+\]
+The stiffness-randomized MLP achieved $100\%$ success on all nine conditions
+and maintained low height error, with overall
+\[
+    \mathrm{MAE}=0.014\ \mathrm{m},
+    \qquad
+    |\mathrm{bias}|=0.011\ \mathrm{m}.
+\]
+The fixed-$8.0\times10^4$ policy performed well at and above its training
+stiffness, but failed to generalize to the soft trampoline. In particular, at
+$(E,h^*)=(4.0\times10^4,0.5)$ it had $0\%$ success due to
+\texttt{no\_valid\_apex\_timeout}, and at
+$(E,h^*)=(4.0\times10^4,0.65)$ it systematically under-jumped with
+\[
+    \mathrm{MAE}=0.103\ \mathrm{m},
+    \qquad
+    h/h^*=0.842.
+\]
+This supports the first-stage story that domain randomization improves
+robustness to trampoline stiffness. However, the randomized policy is not
+strictly better in all metrics: compared with the fixed policy, it uses more
+motor work per target height and has higher orientation RMS on the nominal and
+stiff trampolines. Averaged over all fixed evaluation settings, the randomized
+policy had
+\[
+    W^{+}/h^* \approx 159,
+    \quad
+    W^{\mathrm{abs}}/h^* \approx 247,
+    \quad
+    \mathrm{orientation\_rms}\approx0.092,
+\]
+while the fixed policy had
+\[
+    W^{+}/h^* \approx 138,
+    \quad
+    W^{\mathrm{abs}}/h^* \approx 207,
+    \quad
+    \mathrm{orientation\_rms}\approx0.063.
+\]
+Thus the current MLP+DR policy is a robust average strategy: it solves height
+tracking across stiffness, but it appears less energy-efficient and slightly
+less posture-stable than a policy specialized to the nominal trampoline.
+
+\paragraph{Observation-ablation hypothesis for RNN/RMA.}
+The current actor observes root position and base linear velocity. These terms
+make the instantaneous observation relatively informative: root height and
+vertical velocity expose bounce phase, impact timing, and part of the
+trampoline response. This may explain why MLP+DR already achieves strong
+height tracking despite not observing the trampoline parameter directly. If the
+goal is to demonstrate the value of online dynamics inference, a useful
+additional experiment is to reduce instantaneous observability and compare
+adaptation methods under the same observation constraint.
+
+The proposed controlled variants are:
+\begin{center}
+\small
+\begin{tabular}{p{0.24\linewidth}p{0.42\linewidth}p{0.24\linewidth}}
+\hline
+Variant & Actor observation & Purpose \\
+\hline
+Full-observation MLP+DR & current observation, including root position and
+base linear velocity & strong memoryless baseline \\
+Reduced-observation MLP+DR & remove base linear velocity first; optionally
+also remove root position or at least root height & test whether instantaneous
+state is sufficient \\
+Reduced-observation history MLP & same reduced observation, with stacked
+history/actions & test short-horizon implicit velocity/dynamics inference \\
+Reduced-observation RNN/RMA & same reduced deployable observation, with
+recurrent state or learned latent dynamics & test online trampoline
+identification \\
+\hline
+\end{tabular}
+\end{center}
+
+This ablation should be framed carefully. It should not artificially remove
+sensors only to make the baseline fail. It is justified if real deployment does
+not provide reliable base position or base linear velocity, or if mocap/state
+estimator signals are noisy and delayed. In that case, removing or heavily
+corrupting these observations is a realistic sim-to-real constraint. The fair
+comparison is then not ``full-observation MLP versus reduced-observation
+RNN'', but rather MLP, history-MLP, RNN, and RMA under the same deployable
+observation set. If reduced-observation MLP+DR loses height tracking while
+RNN/RMA recovers it, the paper can claim that temporal inference or latent
+dynamics estimation is needed for robust trampoline adaptation. If height
+tracking remains good even after the reduction, then RNN/RMA should be judged
+mainly on energy efficiency, posture stability, and adaptation speed.
 
 To make different trampoline dynamics visible in evaluation, run fixed
 evaluation sweeps over several discrete trampoline settings instead of relying

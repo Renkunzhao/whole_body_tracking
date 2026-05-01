@@ -41,6 +41,12 @@
         "Tracking-Trampoline-Go2-Wo-State-Estimation-v0",
         "Hopping-Flat-Go2-v0",
         "Hopping-Trampoline-Go2-v0",
+        "Go2-Hopping-Flat",
+        "Go2-Hopping-Trampoline",
+        "Go2-Rebounce-Flat",
+        "Go2-Rebounce-Trampoline",
+        "Tracking-Flat-Go2-Jump-Wo-State-Estimation-v0",
+        "Tracking-Trampoline-Go2-Jump-Wo-State-Estimation-v0"
       ]
     },
     {
@@ -60,7 +66,42 @@
       "type": "promptString",
       "description": "Type wandb run path",
       "default": ""
-    }
+    },
+    {
+      "id": "mode",
+      "type": "pickString",
+      "description": "Select hopping play mode",
+      "default": "fixed",
+      "options": [
+        "fixed",
+        "apex",
+        "stance"
+      ]
+    },
+    {
+      "id": "rebounce_target_height",
+      "type": "promptString",
+      "description": "Type rebounce target height",
+      "default": "0.65"
+    },
+    {
+      "id": "rebounce_drop_height",
+      "type": "promptString",
+      "description": "Type rebounce reset drop height",
+      "default": "0.65"
+    },
+    {
+      "id": "trampoline_youngs_modulus",
+      "type": "promptString",
+      "description": "Type trampoline Young's modulus",
+      "default": "8.0e4"
+    },
+    {
+      "id": "trampoline_mass",
+      "type": "promptString",
+      "description": "Type trampoline mass",
+      "default": "10.0"
+    },
   ],
   "tasks": [
     {
@@ -118,13 +159,13 @@
         "--no-capture-output",
         "-n", "isaaclab",
         "python", "rsl_rl/train.py",
-        "--task", "${input:Task}", 
+        "--task", "${input:Task}",
         "--headless",
         // "env.viewer.origin_type=world",
         // "--video",
         // "--video_interval", "${input:video_interval}",
-        "--registry_name", "${input:registry_name}",
-        "--wandb_path", "${input:wandb_path}",
+        // "--registry_name", "${input:registry_name}",
+        // "--wandb_path", "${input:wandb_path}",
         "--logger", "wandb", 
         "--log_project_name", "WBT", 
         "--run_name", "wbt-${input:output_name}"
@@ -141,10 +182,86 @@
         "--no-capture-output",
         "-n", "isaaclab",
         "python", "rsl_rl/play.py",
-        "--task", "${input:Task}", 
+        "--task", "${input:Task}",
         "--num_envs", "${input:num_envs}", 
         "--wandb_path", "${input:wandb_path}",
+        "--command_vx", "1.0",
+        "--command_vy", "0",
+        "--command_yaw", "0",
         // "env.actions.foot_contact.contact_enabled=true",
+      ],
+      "options": { "cwd": "${workspaceFolder}/scripts" },
+      "problemMatcher": []
+    },
+    {
+      "label": "Play (Tracking)",
+      "type": "shell",
+      "command": "conda",
+      "args": [
+        "run",
+        "--no-capture-output",
+        "-n", "isaaclab",
+        "python", "rsl_rl/play-tracking.py",
+        "--task", "${input:Task}",
+        "--wandb_path", "${input:wandb_path}",
+      ],
+      "options": { "cwd": "${workspaceFolder}/scripts" },
+      "problemMatcher": []
+    },
+    {
+      "label": "Play (Hopping)",
+      "type": "shell",
+      "command": "conda",
+      "args": [
+        "run",
+        "--no-capture-output",
+        "-n", "isaaclab",
+        "python", "rsl_rl/play-hopping.py",
+        "--task", "${input:Task}",
+        "--wandb_path", "${input:wandb_path}",
+        "--mode", "${input:mode}",
+      ],
+      "options": { "cwd": "${workspaceFolder}/scripts" },
+      "problemMatcher": []
+    },
+    {
+      "label": "Play (Rebounce)",
+      "type": "shell",
+      "command": "conda",
+      "args": [
+        "run",
+        "--no-capture-output",
+        "-n", "isaaclab",
+        "python", "rsl_rl/play-rebounce.py",
+        "--task", "${input:Task}",
+        "--wandb_path", "${input:wandb_path}",
+        "--target_height", "${input:rebounce_target_height}",
+        "--drop_height", "${input:rebounce_drop_height}",
+        "--youngs_modulus", "${input:trampoline_youngs_modulus}",
+        "--trampoline_mass", "${input:trampoline_mass}",
+        // "--mode", "${input:mode}",
+      ],
+      "options": { "cwd": "${workspaceFolder}/scripts" },
+      "problemMatcher": []
+    },
+    {
+      "label": "Eval (Rebounce)",
+      "type": "shell",
+      "command": "conda",
+      "args": [
+        "run",
+        "--no-capture-output",
+        "-n", "isaaclab",
+        "python", "rsl_rl/eval-rebounce.py",
+        "--task", "${input:Task}",
+        "--wandb_path", "${input:wandb_path}",
+        "--num_envs", "64",
+        "--episodes_per_condition", "64",
+        "--target_heights", "0.5", "0.65", "0.8",
+        "--youngs_moduli", "4e4", "8e4", "1.6e5",
+        "--masses", "10",
+        "--csv_path", "${workspaceFolder}/rebounce_eval.csv",
+        "--progress_interval", "16",
       ],
       "options": { "cwd": "${workspaceFolder}/scripts" },
       "problemMatcher": []
