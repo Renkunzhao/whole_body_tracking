@@ -245,7 +245,7 @@ The weighted reward is
     R_t = \Delta t \Big(
         &-250\,r^{\mathrm{fail}}_t
         +50\,r^{\mathrm{apex}}_t \\
-        &-2.5\times10^{-2}\,r^{\mathrm{energy}}_t \\
+        &-1.5\times10^{-2}\,r^{\mathrm{energy}}_t \\
         &-2\,r^{\mathrm{orient}}_t
         -0.5\,r^{\mathrm{inplace}}_t
         -10^{-2}\,r^{\mathrm{action}}_t
@@ -313,10 +313,10 @@ termination contributes approximately
     -250 \cdot 0.02 / 20 = -0.25
 \]
 for the environments where that failure happened, before averaging over all
-reset environments. With the current energy weight, a typical sparse energy
-pulse of $W^{+}/h^{*}\approx 150$ contributes
+reset environments. With the current absolute-work weight, a typical sparse
+energy pulse of $W^{\mathrm{abs}}/h^{*}\approx 250$ contributes
 \[
-    -2.5\times10^{-2}\cdot150\cdot0.02/20 \approx -0.00375
+    -1.5\times10^{-2}\cdot250\cdot0.02/20 \approx -0.00375
 \]
 to the logged \texttt{Episode\_Reward/energy\_penalty} for one valid apex.
 
@@ -445,9 +445,9 @@ The implementation exposes this through the \texttt{mode} parameter of
 \texttt{mode=absolute} for $W^{\mathrm{abs}}_k/h^{*}_k$. The raw reward follows
 the same convention as the apex-height pulse: Isaac Lab applies the global
 $\Delta t$ scaling, and the event scale is handled in the configured weight.
-With the current $\Delta t=0.02$ s, the current positive-work weight is
+With the current $\Delta t=0.02$ s, the current absolute-work trial weight is
 \[
-    w_{\mathrm{energy}} = -2.5\times10^{-2}.
+    w_{\mathrm{energy}} = -1.5\times10^{-2}.
 \]
 The positive-work term penalizes active mechanical energy injected by the
 motors:
@@ -476,7 +476,7 @@ A torque-squared term,
 is also useful as a regularizer, but it mainly discourages large torques rather
 than directly measuring active mechanical work.
 
-The current positive-work run shows the intended first-order behavior: the
+The previous positive-work run shows the intended first-order behavior: the
 logged \texttt{Episode\_Reward/energy\_penalty} is roughly $10\%$ of
 \texttt{Episode\_Reward/rebounce\_height}, the valid apex count increases, and
 \texttt{positive\_work\_per\_height} decreases. This indicates that the energy
@@ -513,26 +513,103 @@ $W^{-}_{\mathrm{episode}}/\max(W^{\mathrm{abs}}_{\mathrm{episode}},\epsilon)$ \\
 \subsection{Step 5: Add Trampoline Parameter Randomization}
 
 After the energy-optimized policy works on the fixed trampoline, introduce
-trampoline randomization. The code path already contains a reset event for
-trampoline material and mass randomization, but the current ranges are fixed:
+trampoline randomization. The current Go2 rebounce trampoline setup uses
+log-uniform Young's modulus randomization over a $0.5\times$ to $2.0\times$
+stiffness range while keeping trampoline mass fixed:
 \[
-    E \sim \mathcal{U}(8.0\times 10^4, 8.0\times 10^4),
+    \log E \sim
+    \mathcal{U}\left(\log(4.0\times 10^4),\log(1.6\times 10^5)\right),
     \qquad
     m \sim \mathcal{U}(10,10).
 \]
-Thus the current setup behaves as a fixed-trampoline experiment.
+This corresponds to $E_0=8.0\times10^4$ and
+$E/E_0\in[0.5,2.0]$. Thus the current setup is a first-stage
+stiffness-randomized, fixed-mass experiment.
 
-Start with narrow ranges around the fixed value, then widen them:
+The randomizable trampoline parameters should be introduced in stages:
+\begin{center}
+\small
+\begin{tabular}{p{0.24\linewidth}p{0.38\linewidth}p{0.24\linewidth}}
+\hline
+Parameter & Meaning & Suggested use \\
+\hline
+$E$ / \texttt{youngs\_modulus} & membrane stiffness; controls soft versus
+stiff rebound timing & first-stage randomization \\
+$m$ / \texttt{mass} & trampoline inertia; changes response speed and energy
+exchange timing & first-stage randomization \\
+\texttt{elasticity\_damping} or \texttt{damping\_scale} & material energy
+dissipation & second-stage, one damping knob at a time \\
+\texttt{dynamic\_friction} & tangential foot--trampoline friction, affecting
+slip and in-place stability & robustness sweep \\
+$\nu$ / \texttt{poissons\_ratio} & deformation mode and volume preservation &
+late-stage small-range sweep \\
+\hline
+\end{tabular}
+\end{center}
+
+Keep numerical and sleep parameters fixed during the main physics
+randomization study: \texttt{vertex\_velocity\_damping},
+\texttt{sleep\_damping}, \texttt{sleep\_threshold},
+\texttt{settling\_threshold}, solver iteration counts, mesh resolution,
+\texttt{contact\_offset}, and \texttt{rest\_offset}. These parameters can affect
+stability and numerical dissipation, but they are less direct descriptions of a
+real trampoline than stiffness, mass, damping, friction, and Poisson ratio.
+
+Use the current range as the first-stage domain-randomization test:
 \[
-    E \sim \mathcal{U}(0.8E_0,1.2E_0),
+    \log E \sim \mathcal{U}(\log(0.5E_0),\log(2.0E_0)),
     \qquad
-    m \sim \mathcal{U}(0.8m_0,1.2m_0),
+    m = m_0.
 \]
-and later test wider ranges if the behavior remains stable. Randomizing too
-early can make it difficult to tell whether a behavior change came from energy
-optimization, leg regulation, or trampoline dynamics. It can also encourage a
-more conservative active-jumping strategy that is robust but less clearly
-trampoline-efficient.
+If this range is too difficult, narrow it temporarily, for example to
+$E/E_0\in[0.8,1.25]$, to separate learning instability from adaptation
+failure. If the first-stage stiffness randomization is stable, add mass
+randomization next, e.g. $m\sim\mathcal{U}(0.8m_0,1.2m_0)$,
+where the mass term should be used only after a smoke test confirms that
+runtime mass writes change trampoline dynamics. Randomizing too many parameters
+too early can make it difficult to tell whether a behavior change came from
+energy optimization, leg regulation, or trampoline dynamics. It can also
+encourage a more conservative active-jumping strategy that is robust but less
+clearly trampoline-efficient.
+
+The randomized parameters should not be provided directly to the deployable
+actor policy, since the real robot does not know the true trampoline stiffness,
+mass, or damping. For the paper narrative, the adaptation methods should be
+tested in increasing order of complexity:
+\begin{center}
+\small
+\begin{tabular}{p{0.20\linewidth}p{0.42\linewidth}p{0.26\linewidth}}
+\hline
+Method & Description & Purpose \\
+\hline
+MLP + DR & train one memoryless policy across randomized trampoline stiffness;
+no trampoline parameters and no history in the actor observation & baseline
+robust policy \\
+MLP + history & stack recent observations/actions and feed the flattened history
+to an MLP & test whether short-term interaction history is enough \\
+RNN policy & use an LSTM/GRU policy to infer hidden trampoline dynamics from
+longer temporal context & test recurrent online adaptation \\
+RMA / latent estimator & train with privileged dynamics information, then learn
+a deployable latent estimator from history & final sim-to-real adaptation story
+\\
+\hline
+\end{tabular}
+\end{center}
+Privileged trampoline parameters may be used by the critic, teacher, or
+adaptation module during training, but not as direct actor inputs for a policy
+intended to transfer to hardware.
+
+The first method is intentionally a partially observable baseline. Since the
+actor sees neither the trampoline parameter nor interaction history, it cannot
+condition its timing or leg impedance on the current stiffness. The expected
+failure mode is therefore an averaged strategy: performance on the soft
+trampoline, e.g. $E=4.0\times10^4$, may improve compared with a policy trained
+only at $E=8.0\times10^4$, but nominal-stiffness performance may degrade and
+the hard trampoline, e.g. $E=1.6\times10^5$, may require a different timing
+compromise. This creates the justification for the later methods: history,
+recurrence, or an RMA-style latent estimator should recover stiffness-dependent
+behavior while keeping the deployable actor free of privileged trampoline
+parameters.
 
 To make different trampoline dynamics visible in evaluation, run fixed
 evaluation sweeps over several discrete trampoline settings instead of relying
@@ -541,6 +618,64 @@ apex count, time-out rate, motor positive work, torque norm, contact/stance
 duration, and videos. A useful result should show that the policy adapts its
 timing, leg motion, and motor work across soft and stiff trampolines while
 maintaining the same commanded apex-height objective.
+
+For paper-level comparison, evaluate each method on fixed conditions rather
+than only on the training distribution. A condition is a pair such as
+$(E,h^*)=(4.0\times10^4,0.5)$, where the trampoline stiffness and target apex
+height are held fixed for each $20$ s rollout. Run $N$ independent rollouts per
+condition. Compute metrics within each rollout first, then report the mean and
+standard deviation across rollouts, so that an episode with many apexes does
+not dominate the statistics.
+
+\begin{center}
+\scriptsize
+\begin{tabular}{p{0.32\linewidth}p{0.43\linewidth}p{0.15\linewidth}}
+\hline
+Metric & Definition & Purpose \\
+\hline
+\texttt{success\_rate} &
+fraction of rollouts that reach the $20$ s timeout without
+\texttt{base\_orientation}, \texttt{non\_foot\_contact}, or
+\texttt{no\_valid\_apex\_timeout} & stability \\
+\texttt{failure\_distribution} &
+counts or fractions of each failed-termination reason & failure diagnosis \\
+\texttt{apex\_count\_per\_20s} &
+number of valid apexes in one rollout & sustained hopping frequency \\
+\texttt{height\_matched\_apex\_count} &
+number of valid apexes satisfying the height tolerance & useful successful hops \\
+\texttt{height\_mae} &
+$K^{-1}\sum_{k=1}^{K}|h_k-h^*_k|$ over valid apexes in the rollout &
+absolute tracking accuracy \\
+\texttt{height\_rmse} &
+$\sqrt{K^{-1}\sum_{k=1}^{K}(h_k-h^*_k)^2}$ & sensitivity to large errors \\
+\texttt{height\_bias} &
+$K^{-1}\sum_{k=1}^{K}(h_k-h^*_k)$ & systematic under/over-shoot \\
+\texttt{mean\_h\_over\_target} &
+$K^{-1}\sum_{k=1}^{K}h_k/h^*_k$ & normalized achieved height \\
+\texttt{height\_p90\_error} &
+$90$th percentile of $|h_k-h^*_k|$ & tail robustness \\
+\texttt{pos\_work\_per\_target\_height} &
+mean over valid apex intervals of $W_k^+/h^*_k$ & active work cost \\
+\texttt{abs\_work\_per\_target\_height} &
+mean over valid apex intervals of $W_k^{\mathrm{abs}}/h^*_k$ &
+total motor work cost \\
+\texttt{braking\_ratio} &
+$W^-_{\mathrm{episode}}/\max(W^{\mathrm{abs}}_{\mathrm{episode}},\epsilon)$ &
+braking versus propulsion balance \\
+\texttt{xy\_drift}, \texttt{yaw\_drift} &
+final or RMS base displacement/yaw error over the rollout & in-place behavior \\
+\texttt{orientation\_rms} &
+RMS roll/pitch or projected-gravity error & posture quality \\
+\hline
+\end{tabular}
+\end{center}
+
+For height metrics, use the valid apexes detected by the command term. If
+$K=0$, the rollout should be counted as a failure and the height metrics should
+be excluded from the successful-rollout mean or reported as undefined. For
+energy metrics, the target-height denominator is preferred for method
+comparison because it does not reward jumping higher than commanded; achieved
+height normalization can still be logged as an efficiency diagnostic.
 
 \subsection{TODO: Real-Robot Observation Noise Measurement}
 

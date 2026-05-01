@@ -54,6 +54,28 @@ def _get_rebounce_debug_handles(env):
     return hop_command, energy_command
 
 
+def _get_trampoline_randomizer(env):
+    event_manager = getattr(env.unwrapped, "event_manager", None)
+    if event_manager is None:
+        return None
+    try:
+        event_term = event_manager.get_term_cfg("randomize_trampoline_properties").func
+    except ValueError:
+        return None
+    if not hasattr(event_term, "last_youngs_moduli") or not hasattr(event_term, "last_masses"):
+        return None
+    return event_term
+
+
+def _print_trampoline_params(env, reset_count: int):
+    randomizer = _get_trampoline_randomizer(env)
+    if randomizer is None:
+        return
+    youngs_modulus = float(randomizer.last_youngs_moduli[0])
+    mass = float(randomizer.last_masses[0])
+    print(f"[TRAMP R{reset_count:03d}] E={youngs_modulus:.2e} Pa m={mass:.2f} kg", flush=True)
+
+
 @hydra_task_config(args_cli.task, "rsl_rl_cfg_entry_point")
 def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agent_cfg: RslRlOnPolicyRunnerCfg):
     """Play with RSL-RL agent."""
@@ -100,8 +122,10 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     # obtain the trained policy for inference
     policy = ppo_runner.get_inference_policy(device=env.unwrapped.device)
 
-    obs = env.get_observations()
+    obs, _ = env.reset()
     hop_command, energy_command = _get_rebounce_debug_handles(env)
+    reset_count = 0
+    _print_trampoline_params(env, reset_count)
     apex_count = 0
 
     # simulate environment
@@ -109,7 +133,12 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         # run policy inference without putting mutable environment buffers into inference mode
         with torch.inference_mode():
             actions = policy(obs)
-        obs, _, _, _ = env.step(actions)
+        obs, _, dones, _ = env.step(actions)
+
+        if bool(dones[0]):
+            reset_count += 1
+            apex_count = 0
+            _print_trampoline_params(env, reset_count)
 
         if hop_command is not None and bool(hop_command.is_apex[0]):
             apex_count += 1
@@ -121,13 +150,10 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             if energy_command is not None:
                 positive_work_per_height = float(energy_command.work_per_height_pulse("positive")[0])
                 absolute_work_per_height = float(energy_command.work_per_height_pulse("absolute")[0])
-                energy_text = (
-                    f", positive_work/height={positive_work_per_height:.3f} J/m, "
-                    f"absolute_work/height={absolute_work_per_height:.3f} J/m"
-                )
+                energy_text = f" pos/h={positive_work_per_height:.1f} abs/h={absolute_work_per_height:.1f} J/m"
             print(
-                f"[APEX {apex_count:04d}] height={apex_height:.3f} m, target={target_height:.3f} m, "
-                f"drop={drop_height:.3f} m, error={error:+.3f} m{energy_text}",
+                f"[A{apex_count:03d}] h={apex_height:.3f}/{target_height:.3f} "
+                f"e={error:+.3f} d={drop_height:.3f}{energy_text}",
                 flush=True,
             )
 

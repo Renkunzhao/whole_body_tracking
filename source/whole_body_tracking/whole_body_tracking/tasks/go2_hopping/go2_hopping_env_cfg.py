@@ -36,11 +36,7 @@ from whole_body_tracking.tasks.tracking.mdp import (
     TrampolinePinningActionCfg,
     reapply_trampoline_pinning,
 )
-from whole_body_tracking.utils.trampoline_deformable import (
-    TRAMPOLINE_DR_MASS_RANGE,
-    TRAMPOLINE_DR_YOUNGS_MODULUS_RANGE,
-    make_trampoline_cfg,
-)
+from whole_body_tracking.utils.trampoline_deformable import make_trampoline_cfg
 
 ##
 # Scene definition
@@ -53,6 +49,8 @@ VELOCITY_RANGE = {
     "pitch": (-0.52, 0.52),
     "yaw": (-0.78, 0.78),
 }
+TRAMPOLINE_DR_YOUNGS_MODULUS_RANGE = (8.0e4, 8.0e4)
+TRAMPOLINE_DR_MASS_RANGE = (10.0, 10.0)
 
 GO2_HOPPING_CFG = get_go2_cfg(
     spawn=get_go2_spawn_cfg(

@@ -36,11 +36,7 @@ from whole_body_tracking.tasks.tracking.mdp import (
     TrampolinePinningActionCfg,
     reapply_trampoline_pinning,
 )
-from whole_body_tracking.utils.trampoline_deformable import (
-    TRAMPOLINE_DR_MASS_RANGE,
-    TRAMPOLINE_DR_YOUNGS_MODULUS_RANGE,
-    make_trampoline_cfg,
-)
+from whole_body_tracking.utils.trampoline_deformable import make_trampoline_cfg
 
 ##
 # Scene definition
@@ -54,6 +50,8 @@ VELOCITY_RANGE = {
     "yaw": (-0.78, 0.78),
 }
 REBOUNCE_HEIGHT_RANGE = (0.5, 0.8)
+TRAMPOLINE_DR_YOUNGS_MODULUS_RANGE = (4.0e4, 1.6e5)
+TRAMPOLINE_DR_MASS_RANGE = (10.0, 10.0)
 
 GO2_HOPPING_CFG = get_go2_cfg(
     spawn=get_go2_spawn_cfg(
@@ -232,11 +230,17 @@ class RewardsCfg:
         },
     )
     energy_penalty = RewTerm(
+        # func=mdp.joint_mechanical_energy_penalty,
+        # weight=-2.5e-2,
+        # params={
+        #     "command_name": "energy",
+        #     "mode": "positive",
+        # },
         func=mdp.joint_mechanical_energy_penalty,
-        weight=-2.5e-2,
+        weight=-1.5e-2,
         params={
             "command_name": "energy",
-            "mode": "positive",
+            "mode": "absolute",
         },
     )
     flat_orientation = RewTerm(func=mdp.flat_orientation_l2, weight=-2.0)
@@ -382,6 +386,7 @@ class TrampolineEventCfg(EventCfg):
         params={
             "asset_name": "trampoline",
             "youngs_modulus_range": TRAMPOLINE_DR_YOUNGS_MODULUS_RANGE,
+            "youngs_modulus_distribution": "log_uniform",
             "mass_range": TRAMPOLINE_DR_MASS_RANGE,
         },
     )

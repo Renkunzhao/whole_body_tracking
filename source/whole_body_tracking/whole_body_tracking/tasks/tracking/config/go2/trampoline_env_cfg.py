@@ -15,11 +15,10 @@ from whole_body_tracking.tasks.tracking.config.go2.flat_env_cfg import (
 )
 from whole_body_tracking.tasks.tracking.tracking_env_cfg import ActionsCfg as BaseActionsCfg
 from whole_body_tracking.tasks.tracking.tracking_env_cfg import EventCfg as BaseEventCfg
-from whole_body_tracking.utils.trampoline_deformable import (
-    TRAMPOLINE_DR_MASS_RANGE,
-    TRAMPOLINE_DR_YOUNGS_MODULUS_RANGE,
-    make_trampoline_cfg,
-)
+from whole_body_tracking.utils.trampoline_deformable import make_trampoline_cfg
+
+TRAMPOLINE_DR_YOUNGS_MODULUS_RANGE = (8.0e4, 8.0e4)
+TRAMPOLINE_DR_MASS_RANGE = (10.0, 10.0)
 
 
 @configclass

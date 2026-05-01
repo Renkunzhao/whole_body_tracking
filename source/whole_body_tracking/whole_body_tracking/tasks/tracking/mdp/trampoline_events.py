@@ -9,7 +9,7 @@ from pxr import Sdf
 import isaaclab.sim as sim_utils
 from isaaclab.assets import DeformableObject
 from isaaclab.managers import EventTermCfg, ManagerTermBase
-from isaaclab.utils.math import sample_uniform
+from isaaclab.utils.math import sample_log_uniform, sample_uniform
 
 from whole_body_tracking.utils.trampoline_deformable import (
     get_trampoline_youngs_moduli,
@@ -67,6 +67,19 @@ class RandomizeTrampolineProperties(ManagerTermBase):
             self._mass_attrs.append(attr)
             self._default_masses[env_id] = float(value)
 
+        self._last_youngs_moduli = self._default_youngs_moduli.to(device=env.device).reshape(-1).clone()
+        self._last_masses = self._default_masses.clone()
+
+    @property
+    def last_youngs_moduli(self) -> torch.Tensor:
+        """Most recent Young's modulus values written by this reset event."""
+        return self._last_youngs_moduli
+
+    @property
+    def last_masses(self) -> torch.Tensor:
+        """Most recent trampoline mass values written by this reset event."""
+        return self._last_masses
+
     def reset(self, env_ids=None) -> None:
         pass
 
@@ -75,18 +88,39 @@ class RandomizeTrampolineProperties(ManagerTermBase):
         env: "ManagerBasedEnv",
         env_ids: torch.Tensor,
         youngs_modulus_range: tuple[float, float],
+        youngs_modulus_distribution: str = "uniform",
         mass_range: tuple[float, float] | None = None,
         asset_name: str = "trampoline",
     ) -> None:
         env_ids_tensor = _resolve_env_ids(env, env_ids)
 
-        youngs_moduli = sample_uniform(
-            youngs_modulus_range[0],
-            youngs_modulus_range[1],
-            (len(env_ids_tensor),),
-            device=env.device,
-        ).to(dtype=torch.float32)
+        if youngs_modulus_distribution == "uniform":
+            youngs_moduli = sample_uniform(
+                youngs_modulus_range[0],
+                youngs_modulus_range[1],
+                (len(env_ids_tensor),),
+                device=env.device,
+            ).to(dtype=torch.float32)
+        elif youngs_modulus_distribution == "log_uniform":
+            min_youngs, max_youngs = youngs_modulus_range
+            if min_youngs <= 0.0 or max_youngs <= 0.0:
+                raise ValueError(
+                    "Log-uniform Young's modulus randomization requires positive bounds, "
+                    f"got {youngs_modulus_range}."
+                )
+            youngs_moduli = sample_log_uniform(
+                min_youngs,
+                max_youngs,
+                (len(env_ids_tensor),),
+                device=env.device,
+            ).to(dtype=torch.float32)
+        else:
+            raise ValueError(
+                f"Unsupported Young's modulus distribution: {youngs_modulus_distribution!r}. "
+                "Expected 'uniform' or 'log_uniform'."
+            )
         set_trampoline_youngs_moduli(self._material_view, youngs_moduli, env_ids_tensor)
+        self._last_youngs_moduli[env_ids_tensor] = youngs_moduli
 
         if mass_range is None:
             return
@@ -94,6 +128,7 @@ class RandomizeTrampolineProperties(ManagerTermBase):
         masses = sample_uniform(mass_range[0], mass_range[1], (len(env_ids_tensor),), device=env.device).to(
             dtype=torch.float32
         )
+        self._last_masses[env_ids_tensor] = masses
         with Sdf.ChangeBlock():
             for env_id, mass in zip(env_ids_tensor.tolist(), masses.tolist(), strict=True):
                 self._mass_attrs[env_id].Set(float(mass))
