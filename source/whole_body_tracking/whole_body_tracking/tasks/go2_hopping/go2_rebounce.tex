@@ -15,11 +15,11 @@
 The current task is continuous rebounce control for Go2. At reset, each
 environment samples a scalar target apex-height command
 \begin{equation}
-    h^{*} \sim \mathcal{U}(0.5, 0.8)\ \mathrm{m},
+    h^{*} \sim \mathcal{U}(0.5, 1.2)\ \mathrm{m},
 \end{equation}
 and independently samples the initial drop height
 \begin{equation}
-    h_{\mathrm{drop}} \sim \mathcal{U}(0.5, 0.8)\ \mathrm{m}.
+    h_{\mathrm{drop}} \sim \mathcal{U}(0.5, 1.2)\ \mathrm{m}.
 \end{equation}
 The robot base is placed at $h_{\mathrm{drop}}$ with zero root velocity and the
 default joint state. The policy must keep rebounding for the full episode. The
@@ -82,9 +82,9 @@ The rebounce command is
 In the current setup, the target rebound-apex height and the initial drop height
 are sampled independently from the same range:
 \begin{equation}
-    h^{*} \sim \mathcal{U}(0.5,0.8),
+    h^{*} \sim \mathcal{U}(0.5,1.2),
     \qquad
-    h_{\mathrm{drop}} \sim \mathcal{U}(0.5,0.8).
+    h_{\mathrm{drop}} \sim \mathcal{U}(0.5,1.2).
 \end{equation}
 The reset event writes $h^{*}$ into the command buffer and sets the root state
 to
@@ -587,6 +587,10 @@ randomization study: \texttt{vertex\_velocity\_damping},
 \texttt{contact\_offset}, and \texttt{rest\_offset}. These parameters can affect
 stability and numerical dissipation, but they are less direct descriptions of a
 real trampoline than stiffness, mass, damping, friction, and Poisson ratio.
+For visual parameter sweeps, the rebounce play script exposes fixed overrides
+for $E$, $m$, \texttt{dynamic\_friction},
+\texttt{elasticity\_damping}, \texttt{damping\_scale}, and
+\texttt{poissons\_ratio}.
 
 Use the current range as the first-stage domain-randomization test:
 \[

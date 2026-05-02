@@ -102,6 +102,30 @@
       "description": "Type trampoline mass",
       "default": "10.0"
     },
+    {
+      "id": "trampoline_dynamic_friction",
+      "type": "promptString",
+      "description": "Type trampoline dynamic friction",
+      "default": "0.8"
+    },
+    {
+      "id": "trampoline_elasticity_damping",
+      "type": "promptString",
+      "description": "Type trampoline elasticity damping",
+      "default": "0.02"
+    },
+    {
+      "id": "trampoline_damping_scale",
+      "type": "promptString",
+      "description": "Type trampoline damping scale",
+      "default": "1.0"
+    },
+    {
+      "id": "trampoline_poissons_ratio",
+      "type": "promptString",
+      "description": "Type trampoline Poisson's ratio",
+      "default": "0.35"
+    },
   ],
   "tasks": [
     {
@@ -164,7 +188,7 @@
         // "env.viewer.origin_type=world",
         // "--video",
         // "--video_interval", "${input:video_interval}",
-        // "--registry_name", "${input:registry_name}",
+        // "--registry_name", "${input:ion}",
         // "--wandb_path", "${input:wandb_path}",
         "--logger", "wandb", 
         "--log_project_name", "WBT", 
@@ -236,9 +260,13 @@
         "--task", "${input:Task}",
         "--wandb_path", "${input:wandb_path}",
         "--target_height", "${input:rebounce_target_height}",
-        "--drop_height", "${input:rebounce_drop_height}",
+        // "--drop_height", "${input:rebounce_drop_height}",
         "--youngs_modulus", "${input:trampoline_youngs_modulus}",
         "--trampoline_mass", "${input:trampoline_mass}",
+        "--dynamic_friction", "${input:trampoline_dynamic_friction}",
+        "--elasticity_damping", "${input:trampoline_elasticity_damping}",
+        "--damping_scale", "${input:trampoline_damping_scale}",
+        "--poissons_ratio", "${input:trampoline_poissons_ratio}",
         // "--mode", "${input:mode}",
       ],
       "options": { "cwd": "${workspaceFolder}/scripts" },

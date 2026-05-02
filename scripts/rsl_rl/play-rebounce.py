@@ -16,6 +16,10 @@ parser.add_argument("--target_height", type=float, default=None, help="Fix the r
 parser.add_argument("--drop_height", type=float, default=None, help="Fix the reset drop height during play.")
 parser.add_argument("--youngs_modulus", type=float, default=None, help="Fix trampoline Young's modulus during play.")
 parser.add_argument("--trampoline_mass", type=float, default=None, help="Fix trampoline mass during play.")
+parser.add_argument("--dynamic_friction", type=float, default=None, help="Fix trampoline dynamic friction during play.")
+parser.add_argument("--elasticity_damping", type=float, default=None, help="Fix trampoline elasticity damping during play.")
+parser.add_argument("--damping_scale", type=float, default=None, help="Fix trampoline damping scale during play.")
+parser.add_argument("--poissons_ratio", type=float, default=None, help="Fix trampoline Poisson's ratio during play.")
 # append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
 args_cli, hydra_args = parser.parse_known_args()
@@ -95,13 +99,26 @@ def _get_trampoline_randomizer(env):
     return event_term
 
 
+def _maybe_print_property(parts: list[str], randomizer, attr_name: str, label: str, fmt: str = ".3f"):
+    values = getattr(randomizer, attr_name, None)
+    if values is None:
+        return
+    parts.append(f"{label}={float(values[0]):{fmt}}")
+
+
 def _print_trampoline_params(env, reset_count: int):
     randomizer = _get_trampoline_randomizer(env)
     if randomizer is None:
         return
-    youngs_modulus = float(randomizer.last_youngs_moduli[0])
-    mass = float(randomizer.last_masses[0])
-    print(f"[TRAMP R{reset_count:03d}] E={youngs_modulus:.2e} Pa m={mass:.2f} kg", flush=True)
+    parts = [
+        f"E={float(randomizer.last_youngs_moduli[0]):.2e}",
+        f"m={float(randomizer.last_masses[0]):.2f}",
+    ]
+    _maybe_print_property(parts, randomizer, "last_dynamic_frictions", "mu", ".2f")
+    _maybe_print_property(parts, randomizer, "last_elasticity_dampings", "damp", ".3f")
+    _maybe_print_property(parts, randomizer, "last_damping_scales", "ds", ".2f")
+    _maybe_print_property(parts, randomizer, "last_poissons_ratios", "nu", ".2f")
+    print(f"[TRAMP R{reset_count:03d}] " + " ".join(parts), flush=True)
 
 
 def _get_done_reasons(env, env_id: int = 0) -> list[str]:
@@ -141,6 +158,14 @@ def _set_fixed_play_condition(env_cfg):
             params["youngs_modulus_distribution"] = "uniform"
         if args_cli.trampoline_mass is not None:
             params["mass_range"] = (args_cli.trampoline_mass, args_cli.trampoline_mass)
+        if args_cli.dynamic_friction is not None:
+            params["dynamic_friction_range"] = (args_cli.dynamic_friction, args_cli.dynamic_friction)
+        if args_cli.elasticity_damping is not None:
+            params["elasticity_damping_range"] = (args_cli.elasticity_damping, args_cli.elasticity_damping)
+        if args_cli.damping_scale is not None:
+            params["damping_scale_range"] = (args_cli.damping_scale, args_cli.damping_scale)
+        if args_cli.poissons_ratio is not None:
+            params["poissons_ratio_range"] = (args_cli.poissons_ratio, args_cli.poissons_ratio)
 
     return env_cfg
 

@@ -49,9 +49,13 @@ VELOCITY_RANGE = {
     "pitch": (-0.52, 0.52),
     "yaw": (-0.78, 0.78),
 }
-REBOUNCE_HEIGHT_RANGE = (0.5, 0.8)
-TRAMPOLINE_DR_YOUNGS_MODULUS_RANGE = (4.0e4, 1.6e5)
-TRAMPOLINE_DR_MASS_RANGE = (10.0, 10.0)
+REBOUNCE_HEIGHT_RANGE = (0.5, 1.2)
+TRAMPOLINE_DR_YOUNGS_MODULUS_RANGE = (2.0e4, 8.0e4)
+TRAMPOLINE_DR_MASS_RANGE = (5.0, 15.0)
+TRAMPOLINE_DR_DYNAMIC_FRICTION_RANGE = (0.4, 1.2)
+TRAMPOLINE_DR_ELASTICITY_DAMPING_RANGE = (0.01, 0.1)
+TRAMPOLINE_DR_DAMPING_SCALE_RANGE = (1.0, 1.0)
+TRAMPOLINE_DR_POISSONS_RATIO_RANGE = (0.25, 0.45)
 
 GO2_HOPPING_CFG = get_go2_cfg(
     spawn=get_go2_spawn_cfg(
@@ -389,6 +393,10 @@ class TrampolineEventCfg(EventCfg):
             "youngs_modulus_range": TRAMPOLINE_DR_YOUNGS_MODULUS_RANGE,
             "youngs_modulus_distribution": "log_uniform",
             "mass_range": TRAMPOLINE_DR_MASS_RANGE,
+            "dynamic_friction_range": TRAMPOLINE_DR_DYNAMIC_FRICTION_RANGE,
+            "elasticity_damping_range": TRAMPOLINE_DR_ELASTICITY_DAMPING_RANGE,
+            "damping_scale_range": TRAMPOLINE_DR_DAMPING_SCALE_RANGE,
+            "poissons_ratio_range": TRAMPOLINE_DR_POISSONS_RATIO_RANGE,
         },
     )
     reapply_trampoline_pinning = EventTerm(func=reapply_trampoline_pinning, mode="reset")
