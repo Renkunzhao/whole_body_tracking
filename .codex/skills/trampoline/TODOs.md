@@ -8,6 +8,10 @@ This file is the incremental backlog and work log for trampoline-related work in
 - Append newest progress entries to the work log section, ideally with dates.
 - When one backlog item turns into a substantial implementation thread, capture the detailed design in a dedicated `task-*.md` file and link it from here.
 
+## Code Preferences
+
+- Prefer explicit, minimal interfaces over protective compatibility layers. For CLI parameters, use canonical names directly and avoid alias tables unless the user asks for backwards compatibility.
+
 ## Backlog
 
 ## Task 1: Isaaclab - DeformableObject

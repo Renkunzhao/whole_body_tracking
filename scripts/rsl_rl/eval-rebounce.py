@@ -23,6 +23,30 @@ parser.add_argument("--episodes_per_condition", type=int, default=20, help="Epis
 parser.add_argument("--target_heights", type=float, nargs="+", default=[0.5, 0.65, 0.8])
 parser.add_argument("--youngs_moduli", type=float, nargs="+", default=[4.0e4, 8.0e4, 1.6e5])
 parser.add_argument("--masses", type=float, nargs="+", default=[10.0])
+parser.add_argument("--target_height", type=float, default=0.65, help="Nominal target height used by sweep mode.")
+parser.add_argument(
+    "--drop_height",
+    type=float,
+    default=None,
+    help="Nominal drop height used by sweep mode. If omitted, drop_height=target_height.",
+)
+parser.add_argument("--youngs_modulus", type=float, default=4.0e4, help="Nominal Young's modulus used by sweep mode.")
+parser.add_argument("--trampoline_mass", type=float, default=10.0, help="Nominal trampoline mass used by sweep mode.")
+parser.add_argument("--dynamic_friction", type=float, default=0.8, help="Nominal trampoline dynamic friction.")
+parser.add_argument("--elasticity_damping", type=float, default=0.02, help="Nominal trampoline elasticity damping.")
+parser.add_argument("--damping_scale", type=float, default=1.0, help="Nominal trampoline damping scale.")
+parser.add_argument("--poissons_ratio", type=float, default=0.35, help="Nominal trampoline Poisson's ratio.")
+parser.add_argument(
+    "--sweep",
+    action="append",
+    nargs="+",
+    default=[],
+    metavar=("PARAM", "VALUE"),
+    help=(
+        "Cartesian-product sweep. PARAM must be one of: target_height, drop_height, youngs_modulus, "
+        "mass, dynamic_friction, elasticity_damping, damping_scale, poissons_ratio."
+    ),
+)
 parser.add_argument(
     "--drop_heights",
     type=float,
@@ -155,7 +179,108 @@ def _get_done_reasons(env, env_id: int) -> list[str]:
     return reasons
 
 
-def _set_condition(env, target_height: float, drop_height: float, youngs_modulus: float, mass: float):
+_SWEEP_PARAMS = {
+    "target_height",
+    "drop_height",
+    "youngs_modulus",
+    "mass",
+    "dynamic_friction",
+    "elasticity_damping",
+    "damping_scale",
+    "poissons_ratio",
+}
+
+
+def _validate_sweep_param(name: str) -> str:
+    if name not in _SWEEP_PARAMS:
+        valid = ", ".join(sorted(_SWEEP_PARAMS))
+        raise ValueError(f"Unsupported sweep parameter {name!r}. Valid names: {valid}.")
+    return name
+
+
+def _base_condition_from_args() -> dict[str, float | str]:
+    target_height = float(args_cli.target_height)
+    drop_height = float(args_cli.drop_height) if args_cli.drop_height is not None else target_height
+    return {
+        "condition_name": "nominal",
+        "sweep_param": "none",
+        "sweep_value": float("nan"),
+        "target_height": target_height,
+        "drop_height": drop_height,
+        "youngs_modulus": float(args_cli.youngs_modulus),
+        "mass": float(args_cli.trampoline_mass),
+        "dynamic_friction": float(args_cli.dynamic_friction),
+        "elasticity_damping": float(args_cli.elasticity_damping),
+        "damping_scale": float(args_cli.damping_scale),
+        "poissons_ratio": float(args_cli.poissons_ratio),
+    }
+
+
+def _build_sweep_conditions() -> list[dict[str, float | str]]:
+    base_condition = _base_condition_from_args()
+    if not args_cli.sweep:
+        return []
+
+    sweep_values: dict[str, list[float]] = {}
+    conditions = []
+    for sweep_spec in args_cli.sweep:
+        if len(sweep_spec) < 2:
+            raise ValueError(f"Expected --sweep PARAM VALUE [VALUE ...], got: {sweep_spec}.")
+        param_name = _validate_sweep_param(sweep_spec[0])
+        if param_name in sweep_values:
+            raise ValueError(f"Duplicate --sweep for parameter {param_name!r}.")
+        sweep_values[param_name] = [float(raw_value) for raw_value in sweep_spec[1:]]
+
+    param_names = list(sweep_values.keys())
+    for value_tuple in product(*(sweep_values[param_name] for param_name in param_names)):
+        condition = dict(base_condition)
+        name_parts = []
+        for param_name, value in zip(param_names, value_tuple, strict=True):
+            condition[param_name] = value
+            name_parts.append(f"{param_name}_{value:g}")
+        if "target_height" in sweep_values and args_cli.drop_height is None and "drop_height" not in sweep_values:
+            condition["drop_height"] = condition["target_height"]
+        condition["condition_name"] = "__".join(name_parts)
+        condition["sweep_param"] = "*".join(param_names)
+        condition["sweep_value"] = value_tuple[0] if len(param_names) == 1 else float("nan")
+        conditions.append(condition)
+    return conditions
+
+
+def _build_grid_conditions() -> list[dict[str, float | str]]:
+    drop_heights = args_cli.drop_heights
+    conditions = []
+    for youngs_modulus, mass, target_height in product(args_cli.youngs_moduli, args_cli.masses, args_cli.target_heights):
+        condition_drop_heights = drop_heights if drop_heights is not None and len(drop_heights) > 0 else [target_height]
+        for drop_height in condition_drop_heights:
+            conditions.append(
+                {
+                    "condition_name": "grid",
+                    "sweep_param": "grid",
+                    "sweep_value": float("nan"),
+                    "target_height": float(target_height),
+                    "drop_height": float(drop_height),
+                    "youngs_modulus": float(youngs_modulus),
+                    "mass": float(mass),
+                    "dynamic_friction": float(args_cli.dynamic_friction),
+                    "elasticity_damping": float(args_cli.elasticity_damping),
+                    "damping_scale": float(args_cli.damping_scale),
+                    "poissons_ratio": float(args_cli.poissons_ratio),
+                }
+            )
+    return conditions
+
+
+def _set_condition(env, condition: dict[str, float | str]):
+    target_height = float(condition["target_height"])
+    drop_height = float(condition["drop_height"])
+    youngs_modulus = float(condition["youngs_modulus"])
+    mass = float(condition["mass"])
+    dynamic_friction = float(condition["dynamic_friction"])
+    elasticity_damping = float(condition["elasticity_damping"])
+    damping_scale = float(condition["damping_scale"])
+    poissons_ratio = float(condition["poissons_ratio"])
+
     unwrapped = env.unwrapped
     hop_command = unwrapped.command_manager.get_term("hop")
     hop_command.cfg.ranges.peak_height = (target_height, target_height)
@@ -176,11 +301,19 @@ def _set_condition(env, target_height: float, drop_height: float, youngs_modulus
     trampoline_cfg.params["youngs_modulus_range"] = (youngs_modulus, youngs_modulus)
     trampoline_cfg.params["youngs_modulus_distribution"] = "uniform"
     trampoline_cfg.params["mass_range"] = (mass, mass)
+    trampoline_cfg.params["dynamic_friction_range"] = (dynamic_friction, dynamic_friction)
+    trampoline_cfg.params["elasticity_damping_range"] = (elasticity_damping, elasticity_damping)
+    trampoline_cfg.params["damping_scale_range"] = (damping_scale, damping_scale)
+    trampoline_cfg.params["poissons_ratio_range"] = (poissons_ratio, poissons_ratio)
     if hasattr(unwrapped.cfg.events, "randomize_trampoline_properties"):
         params = unwrapped.cfg.events.randomize_trampoline_properties.params
         params["youngs_modulus_range"] = (youngs_modulus, youngs_modulus)
         params["youngs_modulus_distribution"] = "uniform"
         params["mass_range"] = (mass, mass)
+        params["dynamic_friction_range"] = (dynamic_friction, dynamic_friction)
+        params["elasticity_damping_range"] = (elasticity_damping, elasticity_damping)
+        params["damping_scale_range"] = (damping_scale, damping_scale)
+        params["poissons_ratio_range"] = (poissons_ratio, poissons_ratio)
 
 
 class EpisodeStats:
@@ -278,7 +411,7 @@ class EpisodeStats:
         }
 
 
-def _aggregate(condition: dict[str, float], episodes: list[dict[str, float | int | str | bool]]) -> dict[str, float | str]:
+def _aggregate(condition: dict[str, float | str], episodes: list[dict[str, float | int | str | bool]]) -> dict[str, float | str]:
     failure_counts = Counter(str(ep["reason"]) for ep in episodes if not bool(ep["success"]))
     result: dict[str, float | str] = {
         **condition,
@@ -313,9 +446,10 @@ def _aggregate(condition: dict[str, float], episodes: list[dict[str, float | int
     return result
 
 
-def _print_episode(condition: dict[str, float], episode_index: int, stats: dict[str, float | int | str | bool]):
+def _print_episode(condition: dict[str, float | str], episode_index: int, stats: dict[str, float | int | str | bool]):
     print(
-        f"[EP {episode_index:04d}] E={condition['youngs_modulus']:.2e} h={condition['target_height']:.2f} "
+        f"[EP {episode_index:04d}] {condition['condition_name']} "
+        f"E={condition['youngs_modulus']:.2e} h={condition['target_height']:.2f} "
         f"ok={int(stats['success'])} reason={stats['reason']} apex={stats['apex']} "
         f"mae={_fmt(stats['mae'])} bias={_fmt(stats['bias'])} h/t={_fmt(stats['h_over_target'])} "
         f"posT={_fmt(stats['pos_target'], 1)} absT={_fmt(stats['abs_target'], 1)}",
@@ -325,8 +459,11 @@ def _print_episode(condition: dict[str, float], episode_index: int, stats: dict[
 
 def _print_condition_result(result: dict[str, float | str]):
     print(
-        f"[RESULT] E={result['youngs_modulus']:.2e} target={result['target_height']:.2f} "
-        f"drop={result['drop_height']:.2f} mass={result['mass']:.2f} "
+        f"[RESULT] {result['condition_name']} sweep={result['sweep_param']}:{_fmt(result['sweep_value'])} "
+        f"E={result['youngs_modulus']:.2e} target={result['target_height']:.2f} "
+        f"drop={result['drop_height']:.2f} m={result['mass']:.2f} "
+        f"mu={result['dynamic_friction']:.2f} damp={result['elasticity_damping']:.3f} "
+        f"ds={result['damping_scale']:.2f} nu={result['poissons_ratio']:.2f} "
         f"success={100.0 * result['success_rate']:.1f}% fail={result['failure_distribution']} "
         f"apex={_fmt(result['apex_mean'])}±{_fmt(result['apex_std'])} "
         f"mae={_fmt(result['mae_mean'])}±{_fmt(result['mae_std'])} "
@@ -408,49 +545,34 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
     hop_command, energy_command = _get_rebounce_handles(env)
     aggregate_rows = []
-    drop_heights = args_cli.drop_heights
     csv_path = _csv_path_with_wandb_id(args_cli.csv_path, args_cli.wandb_path) if args_cli.csv_path is not None else None
-    conditions = []
-    for youngs_modulus, mass, target_height in product(args_cli.youngs_moduli, args_cli.masses, args_cli.target_heights):
-        condition_drop_heights = drop_heights if drop_heights is not None and len(drop_heights) > 0 else [target_height]
-        for drop_height in condition_drop_heights:
-            conditions.append(
-                {
-                    "youngs_modulus": float(youngs_modulus),
-                    "mass": float(mass),
-                    "target_height": float(target_height),
-                    "drop_height": float(drop_height),
-                }
-            )
+    conditions = _build_sweep_conditions()
+    condition_mode = "sweep"
+    if not conditions:
+        conditions = _build_grid_conditions()
+        condition_mode = "grid"
 
     if csv_path is not None:
         _prepare_csv(csv_path)
 
     total_conditions = len(conditions)
     print(
-        f"[INFO] Evaluating {total_conditions} conditions with num_envs={args_cli.num_envs}, "
+        f"[INFO] Evaluating {total_conditions} {condition_mode} conditions with num_envs={args_cli.num_envs}, "
         f"episodes_per_condition={args_cli.episodes_per_condition}",
         flush=True,
     )
 
     for condition_index, condition in enumerate(conditions, start=1):
-        youngs_modulus = condition["youngs_modulus"]
-        mass = condition["mass"]
-        target_height = condition["target_height"]
-        drop_height = condition["drop_height"]
-        condition = {
-            "youngs_modulus": float(youngs_modulus),
-            "mass": float(mass),
-            "target_height": float(target_height),
-            "drop_height": float(drop_height),
-        }
         print(
             f"[COND {condition_index:03d}/{total_conditions:03d}] "
-            f"E={youngs_modulus:.2e} mass={mass:.2f} target={target_height:.2f} "
-            f"drop={drop_height:.2f} episodes={args_cli.episodes_per_condition}",
+            f"{condition['condition_name']} sweep={condition['sweep_param']}:{_fmt(float(condition['sweep_value']))} "
+            f"E={condition['youngs_modulus']:.2e} m={condition['mass']:.2f} "
+            f"mu={condition['dynamic_friction']:.2f} damp={condition['elasticity_damping']:.3f} "
+            f"nu={condition['poissons_ratio']:.2f} target={condition['target_height']:.2f} "
+            f"drop={condition['drop_height']:.2f} episodes={args_cli.episodes_per_condition}",
             flush=True,
         )
-        _set_condition(env, float(target_height), float(drop_height), float(youngs_modulus), float(mass))
+        _set_condition(env, condition)
         obs, _ = env.reset()
         stats = [EpisodeStats(env, env_id, energy_command) for env_id in range(env.unwrapped.num_envs)]
         episodes = []
