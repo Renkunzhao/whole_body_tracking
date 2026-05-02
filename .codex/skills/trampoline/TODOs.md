@@ -14,34 +14,35 @@ This file is the incremental backlog and work log for trampoline-related work in
 
 ## Backlog
 
-## Task 1: Isaaclab - DeformableObject
+## Active: Go2 Continuous Rebounce
 
-Incorporate a soft-body trampoline into the training environment, with domain randomization over `youngs_modulus` and `trampoline_mass`.
+Current baseline:
+- deformable trampoline with rim pinning;
+- independent drop height and target apex height;
+- command-owned valid-apex state machine;
+- deployable actor observation without base position or base linear velocity;
+- privileged critic with base state;
+- energy metrics/reward available;
+- fixed-condition evaluation through `scripts/rsl_rl/eval-rebounce.py`.
 
-**Ref:**
-- `/home/rkz/code/whole_body_tracking/scripts/trampoline.py`
+Near-term experiments:
+- add MLP observation/action history;
+- test RNN policy under the same deployable observation;
+- test RMA/latent dynamics estimator after history/RNN baselines;
+- evaluate high-target/high-damping stress conditions;
+- measure real-robot observation noise and update corruption ranges.
 
-## Task 2: Go2 Hopping
+## Maintenance
 
-Migrate the existing hopping controller from IsaacGym to Isaac Lab.
-
-**Ref:**
-- `/home/rkz/code/Isaacgym/src/My_unitree_go2_gym/legged_gym/envs/Go2_MoB/GO2_JUMP/go2_jump_env.py`
-- `/home/rkz/code/mjlab/src/mjlab/tasks/hopping/hopping_env_cfg.py`
-
-## Task 3: Go2 Tracking
-
-Adapt the existing humanoid (G1) whole-body motion tracking pipeline for quadruped (Go2) use.
-
-**Ref:**
-- `/home/rkz/code/whole_body_tracking/source/whole_body_tracking/whole_body_tracking/tasks/tracking/config/g1/flat_env_cfg.py`
-- `/home/rkz/code/mjlab/src/mjlab/tasks/tracking/config/go2/env_cfgs.py`
-
-## Task 4: Custom contact model
-
-Replace trampoline with customized contact model
+- Keep `go2_rebounce.tex` aligned with the current task definition and latest
+  evaluation conclusions.
+- Keep `Structure.md` focused on the current architecture, not early prototype
+  notes.
+- Move old implementation notes to task-specific docs instead of leaving them
+  as active backlog.
 
 ## Work Log
 
 - `YYYY-MM-DD`: Add new entries here in reverse chronological order.
+- `2026-05-01`: Go2 rebounce is now the main trampoline path. MLP+DR baseline works with deployable observations; next steps are observation history, RNN, then RMA.
 - `2026-04-02`: Tracking-Trampoline-Go2-v0 and Tracking-Flat-Go2-Wo-State-Estimation-v0

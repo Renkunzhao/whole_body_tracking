@@ -547,17 +547,32 @@ $W^{-}_{\mathrm{episode}}/\max(W^{\mathrm{abs}}_{\mathrm{episode}},\epsilon)$ \\
 
 After the energy-optimized policy works on the fixed trampoline, introduce
 trampoline randomization. The current Go2 rebounce trampoline setup uses
-log-uniform Young's modulus randomization over a $0.5\times$ to $2.0\times$
-stiffness range while keeping trampoline mass fixed:
+multi-parameter randomization over stiffness, mass, friction, material damping,
+and Poisson ratio:
 \[
     \log E \sim
-    \mathcal{U}\left(\log(4.0\times 10^4),\log(1.6\times 10^5)\right),
+    \mathcal{U}\left(\log(2.0\times 10^4),\log(8.0\times 10^4)\right),
     \qquad
-    m \sim \mathcal{U}(10,10).
+    m \sim \mathcal{U}(5,15),
 \]
-This corresponds to $E_0=8.0\times10^4$ and
-$E/E_0\in[0.5,2.0]$. Thus the current setup is a first-stage
-stiffness-randomized, fixed-mass experiment.
+\[
+    \mu_d \sim \mathcal{U}(0.4,1.2),
+    \qquad
+    d_e \sim \mathcal{U}(0.01,0.1),
+    \qquad
+    \nu \sim \mathcal{U}(0.25,0.45),
+\]
+with \texttt{damping\_scale}=1.0 fixed. Young's modulus is sampled
+log-uniformly because stiffness changes multiplicatively; the other parameters
+are sampled uniformly in their current engineering ranges. The earlier
+first-stage setup used
+\[
+    E\sim \mathrm{LogUniform}(4.0\times10^4,1.6\times10^5),
+    \qquad m=10,
+\]
+and remains a useful historical baseline. The current range intentionally
+shifts toward softer trampolines because the old $8.0\times10^4$ and
+$1.6\times10^5$ settings were too similar in height tracking.
 
 The randomizable trampoline parameters should be introduced in stages:
 \begin{center}
@@ -592,22 +607,18 @@ for $E$, $m$, \texttt{dynamic\_friction},
 \texttt{elasticity\_damping}, \texttt{damping\_scale}, and
 \texttt{poissons\_ratio}.
 
-Use the current range as the first-stage domain-randomization test:
+Use the stiffness range as the first-stage domain-randomization test:
 \[
-    \log E \sim \mathcal{U}(\log(0.5E_0),\log(2.0E_0)),
-    \qquad
-    m = m_0.
+    \log E \sim \mathcal{U}(\log(2.0\times10^4),\log(8.0\times10^4)).
 \]
 If this range is too difficult, narrow it temporarily, for example to
 $E/E_0\in[0.8,1.25]$, to separate learning instability from adaptation
-failure. If the first-stage stiffness randomization is stable, add mass
-randomization next, e.g. $m\sim\mathcal{U}(0.8m_0,1.2m_0)$,
-where the mass term should be used only after a smoke test confirms that
-runtime mass writes change trampoline dynamics. Randomizing too many parameters
-too early can make it difficult to tell whether a behavior change came from
-energy optimization, leg regulation, or trampoline dynamics. It can also
-encourage a more conservative active-jumping strategy that is robust but less
-clearly trampoline-efficient.
+failure. If stiffness randomization is stable, add mass and material damping
+next, then friction and Poisson ratio. Randomizing too many parameters too
+early can make it difficult to tell whether a behavior change came from energy
+optimization, leg regulation, or trampoline dynamics. It can also encourage a
+more conservative active-jumping strategy that is robust but less clearly
+trampoline-efficient.
 
 The randomized parameters should not be provided directly to the deployable
 actor policy, since the real robot does not know the true trampoline stiffness,
@@ -704,15 +715,60 @@ Thus the current MLP+DR policy is a robust average strategy: it solves height
 tracking across stiffness, but it appears less energy-efficient and slightly
 less posture-stable than a policy specialized to the nominal trampoline.
 
+\paragraph{Latest trampoline-parameter sweep.}
+A later fixed-condition sweep evaluated the current DR policy on $27$
+conditions:
+\[
+    h^*\in\{0.5,0.85,1.2\},
+    \qquad
+    E\in\{2.0\times10^4,4.0\times10^4,8.0\times10^4\},
+    \qquad
+    d_e\in\{0.01,0.05,0.1\},
+\]
+with $m=10$, $\mu_d=0.75$, \texttt{damping\_scale}=1.0, and
+$\nu=0.35$. Each condition used $64$ rollouts. The policy was stable:
+$26/27$ conditions had $100\%$ success, and the only non-perfect condition was
+$(h^*,E,d_e)=(1.2,8.0\times10^4,0.01)$ with one
+\texttt{no\_valid\_apex\_timeout} failure.
+
+Height tracking remains strong for moderate targets but the high target becomes
+a useful stress test:
+\[
+\begin{array}{c|ccc}
+h^* & 0.5 & 0.85 & 1.2 \\
+\hline
+\mathrm{MAE}\ [\mathrm{m}] & 0.016 & 0.024 & 0.140 \\
+\mathrm{bias}\ [\mathrm{m}] & +0.004 & -0.009 & -0.115 \\
+h/h^* & 1.009 & 0.989 & 0.904
+\end{array}
+\]
+Thus the main failure mode at $h^*=1.2$ is not random falling but systematic
+under-jumping. Damping has the clearest effect:
+\[
+\begin{array}{c|ccc}
+d_e & 0.01 & 0.05 & 0.10 \\
+\hline
+\mathrm{MAE}\ [\mathrm{m}] & 0.035 & 0.045 & 0.101 \\
+\mathrm{bias}\ [\mathrm{m}] & +0.011 & -0.035 & -0.096 \\
+W^+/h^* & 211 & 281 & 309
+\end{array}
+\]
+Low damping is easier and more energy-efficient but produces more xy drift;
+high damping dissipates trampoline energy, increases active motor work, and
+causes under-jumping, especially for $h^*=1.2$. This suggests that future
+adaptation methods should be evaluated on high-target/high-damping stress
+settings in addition to ordinary moderate-height tracking.
+
 \paragraph{Observation-ablation hypothesis for RNN/RMA.}
-The current actor observes root position and base linear velocity. These terms
-make the instantaneous observation relatively informative: root height and
-vertical velocity expose bounce phase, impact timing, and part of the
-trampoline response. This may explain why MLP+DR already achieves strong
-height tracking despite not observing the trampoline parameter directly. If the
-goal is to demonstrate the value of online dynamics inference, a useful
-additional experiment is to reduce instantaneous observability and compare
-adaptation methods under the same observation constraint.
+The earlier actor observed root position and base linear velocity. Those terms
+make the instantaneous observation highly informative: root height and vertical
+velocity expose bounce phase, impact timing, and part of the trampoline
+response. The current actor removes those terms and keeps only the deployable
+observation set, while the critic remains privileged. This makes the task more
+realistic for hardware without mocap and creates a better test bed for online
+dynamics inference. The next question is whether a memoryless MLP can still
+infer enough from the instantaneous deployable observation, or whether history,
+recurrence, or an RMA latent are needed.
 
 The proposed controlled variants are:
 \begin{center}
@@ -721,15 +777,14 @@ The proposed controlled variants are:
 \hline
 Variant & Actor observation & Purpose \\
 \hline
-Full-observation MLP+DR & current observation, including root position and
-base linear velocity & strong memoryless baseline \\
-Reduced-observation MLP+DR & remove base linear velocity first; optionally
-also remove root position or at least root height & test whether instantaneous
-state is sufficient \\
-Reduced-observation history MLP & same reduced observation, with stacked
+Historical full-observation MLP+DR & includes root position and base linear
+velocity & upper-bound memoryless baseline \\
+Deployable MLP+DR & no root position, no root quaternion, no base linear
+velocity & current memoryless baseline \\
+Deployable history MLP & same deployable observation, with stacked
 history/actions & test short-horizon implicit velocity/dynamics inference \\
-Reduced-observation RNN/RMA & same reduced deployable observation, with
-recurrent state or learned latent dynamics & test online trampoline
+Deployable RNN/RMA & same deployable observation, with recurrent state or
+learned latent dynamics & test online trampoline
 identification \\
 \hline
 \end{tabular}
@@ -747,6 +802,26 @@ RNN/RMA recovers it, the paper can claim that temporal inference or latent
 dynamics estimation is needed for robust trampoline adaptation. If height
 tracking remains good even after the reduction, then RNN/RMA should be judged
 mainly on energy efficiency, posture stability, and adaptation speed.
+
+\paragraph{Next adaptation sequence.}
+The next method-development sequence is:
+\begin{enumerate}
+    \item \textbf{MLP + observation history}: keep the deployable instantaneous
+    observation, stack a short window of recent observations/actions, and feed
+    the flattened vector to the same MLP policy. This is the simplest test of
+    whether recent interaction history reveals trampoline damping and timing.
+    \item \textbf{RNN policy}: replace the flattened history with a recurrent
+    policy state, e.g. GRU or LSTM. This tests whether learned memory improves
+    online adaptation over a fixed-length history window.
+    \item \textbf{RMA}: train a teacher or privileged module with trampoline
+    dynamics information, then train a deployable adaptation module that
+    infers a latent dynamics code from history. This is the final paper-facing
+    adaptation story if MLP+history or RNN expose a clear benefit.
+\end{enumerate}
+All three methods should use the same deployable observation set for a fair
+comparison. The privileged trampoline parameters may be used for critic,
+teacher, or latent-supervision losses, but not as direct actor inputs at test
+time.
 
 To make different trampoline dynamics visible in evaluation, run fixed
 evaluation sweeps over several discrete trampoline settings instead of relying
@@ -863,20 +938,21 @@ setting, and videos.
 
 The recommended order is:
 \begin{enumerate}
-    \item freeze the current setup with independent drop/target heights and
-    in-place constraints;
-    \item add only minimal leg-motion regulation needed to remove artifacts;
-    \item add energy optimization on the fixed trampoline;
-    \item add trampoline parameter randomization and evaluate discrete
-    trampoline settings;
+    \item keep the current deployable-observation MLP+DR baseline as the
+    reference;
+    \item add observation history to the MLP and evaluate the same fixed
+    trampoline conditions;
+    \item test RNN policies under the same observation and evaluation protocol;
+    \item move to RMA only after the history/RNN baselines reveal which
+    trampoline conditions need online adaptation;
     \item measure real-robot observation noise and update observation
     corruption;
-    \item run final ablations.
+    \item run final ablations over reward, termination, energy, and trampoline
+    randomization terms.
 \end{enumerate}
 
-This order freezes the updated task definition first, removes obvious motion
-artifacts, optimizes active motor energy on a known trampoline, then tests
-robustness and adaptation across trampoline dynamics before final explanatory
-ablations.
+This order treats MLP+DR as the current baseline, then adds temporal inference
+in increasing complexity: explicit history, recurrent memory, and finally an
+RMA-style latent dynamics estimator.
 
 \end{document}
