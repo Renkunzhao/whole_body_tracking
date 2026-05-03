@@ -21,7 +21,8 @@ This file is the current architecture map for trampoline-related work in
   owns the rebounce command state, valid-apex state machine, height metrics,
   and energy metrics.
 - `source/whole_body_tracking/whole_body_tracking/tasks/go2_hopping/mdp/rewards.py`
-  consumes command-owned apex pulses for height and energy rewards.
+  consumes command-owned apex pulses for height and energy rewards; the energy
+  reward weight is delayed by curriculum.
 - `source/whole_body_tracking/whole_body_tracking/tasks/go2_hopping/mdp/terminations.py`
   consumes command-owned apex pulses for no-valid-apex timeout.
 - `source/whole_body_tracking/whole_body_tracking/tasks/tracking/mdp/trampoline_events.py`

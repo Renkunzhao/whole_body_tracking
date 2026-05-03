@@ -51,6 +51,10 @@ VELOCITY_RANGE = {
 }
 REBOUNCE_HEIGHT_RANGE = (0.5, 1.2)
 REBOUNCE_OBS_HISTORY_LENGTH = 5
+REBOUNCE_PPO_STEPS_PER_ITERATION = 24
+REBOUNCE_ENERGY_START_ITERATION = 1000
+REBOUNCE_ENERGY_START_STEP = REBOUNCE_ENERGY_START_ITERATION * REBOUNCE_PPO_STEPS_PER_ITERATION
+REBOUNCE_ENERGY_WEIGHT = -1.5e-2
 TRAMPOLINE_DR_YOUNGS_MODULUS_RANGE = (2.0e4, 8.0e4)
 TRAMPOLINE_DR_MASS_RANGE = (5.0, 15.0)
 TRAMPOLINE_DR_DYNAMIC_FRICTION_RANGE = (0.4, 1.2)
@@ -266,7 +270,7 @@ class RewardsCfg:
         #     "mode": "positive",
         # },
         func=mdp.joint_mechanical_energy_penalty,
-        weight=-1.5e-2,
+        weight=0.0,
         params={
             "command_name": "energy",
             "mode": "absolute",
@@ -321,12 +325,19 @@ class TerminationsCfg:
 class CurriculumCfg:
     """Curriculum terms for the MDP.
 
-    Phase 1 (steps 0 ~ JOINT_DEVIATION_START): learn basic hopping —
-        active terms: phase_contact (+2.0), action_rate_l2 (-1e-2), joint_pos_limits (-10.0).
-    Phase 2 (steps JOINT_DEVIATION_START ~ TRACK_ANG_VEL_START): add pose regularization.
-    Phase 3 (steps TRACK_ANG_VEL_START+): add angular velocity tracking.
+    The energy penalty is delayed until the policy first learns sustained
+    rebounding. ``modify_reward_weight`` uses manager steps, so 1000 PPO
+    iterations correspond to 1000 * num_steps_per_env = 24000 manager steps.
     """
-    pass
+
+    enable_energy_penalty = CurrTerm(
+        func=modify_reward_weight,
+        params={
+            "term_name": "energy_penalty",
+            "weight": REBOUNCE_ENERGY_WEIGHT,
+            "num_steps": REBOUNCE_ENERGY_START_STEP,
+        },
+    )
 
 
 ##

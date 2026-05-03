@@ -522,6 +522,16 @@ With the current $\Delta t=0.02$ s, the current absolute-work trial weight is
 \[
     w_{\mathrm{energy}} = -1.5\times10^{-2}.
 \]
+For training stability, this weight is not active from the first iteration.
+The reward term starts with zero weight, and a curriculum switches it to
+$-1.5\times10^{-2}$ after $1000$ PPO iterations. Since the PPO runner uses
+$24$ manager steps per iteration, the curriculum threshold is
+\[
+    N_{\mathrm{energy}} = 1000 \times 24 = 24000
+\]
+manager steps. This lets the policy first discover sustained valid-apex
+rebounding before the sparse work-per-height penalty can make passive
+non-jumping attractive.
 The positive-work term penalizes active mechanical energy injected by the
 motors:
 \[

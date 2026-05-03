@@ -24,7 +24,8 @@ Current baseline:
 - flattened-history MLP ablation completed for `history_length=5` and
   `history_length=10`;
 - privileged critic with base state;
-- energy metrics/reward available;
+- energy metrics/reward available; energy penalty is delayed until 1000 PPO
+  iterations;
 - fixed-condition evaluation through `scripts/rsl_rl/eval-rebounce.py`.
 
 Near-term experiments:
@@ -48,6 +49,8 @@ Near-term experiments:
 - `2026-05-02`: H=5 flattened-history MLP was close to no-history overall but
   under-jumped more at high target height; H=10 often became passive. Added
   RNN task/config as the next adaptation baseline.
+- `2026-05-02`: Delayed `energy_penalty` curriculum until 1000 PPO iterations
+  so RNN/MLP policies learn sustained rebounding before work minimization.
 - `2026-05-01`: Enabled `history_length=10` for the deployable actor observation in Go2 rebounce. Critic remains instantaneous privileged state.
 - `2026-05-01`: Go2 rebounce is now the main trampoline path. MLP+DR baseline works with deployable observations; next steps are observation history, RNN, then RMA.
 - `2026-04-02`: Tracking-Trampoline-Go2-v0 and Tracking-Flat-Go2-Wo-State-Estimation-v0
