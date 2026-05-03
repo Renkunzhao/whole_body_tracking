@@ -21,13 +21,14 @@ Current baseline:
 - independent drop height and target apex height;
 - command-owned valid-apex state machine;
 - deployable actor observation without base position or base linear velocity;
+- flattened-history MLP ablation completed for `history_length=5` and
+  `history_length=10`;
 - privileged critic with base state;
 - energy metrics/reward available;
 - fixed-condition evaluation through `scripts/rsl_rl/eval-rebounce.py`.
 
 Near-term experiments:
-- add MLP observation/action history;
-- test RNN policy under the same deployable observation;
+- train and evaluate the RNN policy under the same deployable observation;
 - test RMA/latent dynamics estimator after history/RNN baselines;
 - evaluate high-target/high-damping stress conditions;
 - measure real-robot observation noise and update corruption ranges.
@@ -44,5 +45,9 @@ Near-term experiments:
 ## Work Log
 
 - `YYYY-MM-DD`: Add new entries here in reverse chronological order.
+- `2026-05-02`: H=5 flattened-history MLP was close to no-history overall but
+  under-jumped more at high target height; H=10 often became passive. Added
+  RNN task/config as the next adaptation baseline.
+- `2026-05-01`: Enabled `history_length=10` for the deployable actor observation in Go2 rebounce. Critic remains instantaneous privileged state.
 - `2026-05-01`: Go2 rebounce is now the main trampoline path. MLP+DR baseline works with deployable observations; next steps are observation history, RNN, then RMA.
 - `2026-04-02`: Tracking-Trampoline-Go2-v0 and Tracking-Flat-Go2-Wo-State-Estimation-v0

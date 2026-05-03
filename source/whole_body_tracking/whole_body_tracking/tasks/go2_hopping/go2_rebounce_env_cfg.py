@@ -50,6 +50,7 @@ VELOCITY_RANGE = {
     "yaw": (-0.78, 0.78),
 }
 REBOUNCE_HEIGHT_RANGE = (0.5, 1.2)
+REBOUNCE_OBS_HISTORY_LENGTH = 5
 TRAMPOLINE_DR_YOUNGS_MODULUS_RANGE = (2.0e4, 8.0e4)
 TRAMPOLINE_DR_MASS_RANGE = (5.0, 15.0)
 TRAMPOLINE_DR_DYNAMIC_FRICTION_RANGE = (0.4, 1.2)
@@ -167,6 +168,8 @@ class ObservationsCfg:
         def __post_init__(self):
             self.enable_corruption = True
             self.concatenate_terms = True
+            self.history_length = REBOUNCE_OBS_HISTORY_LENGTH
+            self.flatten_history_dim = True
 
     @configclass
     class PrivilegedCfg(PolicyCfg):
@@ -177,8 +180,29 @@ class ObservationsCfg:
         def __post_init__(self):
             super().__post_init__()
             self.enable_corruption = False
+            self.history_length = 0
 
     # observation groups
+    policy: PolicyCfg = PolicyCfg()
+    critic: PrivilegedCfg = PrivilegedCfg()
+
+
+@configclass
+class RecurrentObservationsCfg(ObservationsCfg):
+    """Instantaneous deployable observations for recurrent policies."""
+
+    @configclass
+    class PolicyCfg(ObservationsCfg.PolicyCfg):
+        def __post_init__(self):
+            super().__post_init__()
+            self.history_length = 0
+
+    @configclass
+    class PrivilegedCfg(ObservationsCfg.PrivilegedCfg):
+        def __post_init__(self):
+            super().__post_init__()
+            self.history_length = 0
+
     policy: PolicyCfg = PolicyCfg()
     critic: PrivilegedCfg = PrivilegedCfg()
 
@@ -409,3 +433,10 @@ class Go2RebounceTrampolineEnvCfg(Go2RebounceEnvCfg):
     scene: TrampolineSceneCfg = TrampolineSceneCfg(num_envs=2048, env_spacing=4.0, replicate_physics=False)
     actions: TrampolineActionsCfg = TrampolineActionsCfg()
     events: TrampolineEventCfg = TrampolineEventCfg()
+
+
+@configclass
+class Go2RebounceTrampolineRnnEnvCfg(Go2RebounceTrampolineEnvCfg):
+    """Trampoline rebounce with recurrent policy observations."""
+
+    observations: RecurrentObservationsCfg = RecurrentObservationsCfg()

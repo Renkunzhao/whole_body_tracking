@@ -181,6 +181,46 @@ remains deployable. The policy action is a 12-DoF joint-position target action
 with the default Go2 joint offset. In the trampoline variant, a separate action
 term keeps the trampoline rim pinned.
 
+\paragraph{Observation history.}
+The current history-MLP experiment enables actor observation history with
+\[
+    H = 5
+\]
+manager steps. Since the control step is $\Delta t=0.02$ s, the flattened actor
+input contains roughly $0.1$ s of recent deployable observations/actions:
+\[
+    \left[
+        \bm{o}^{\pi,\mathrm{deploy}}_{t-H+1},
+        \ldots,
+        \bm{o}^{\pi,\mathrm{deploy}}_{t}
+    \right].
+\]
+The history dimension is flattened by Isaac Lab before being passed to the MLP.
+Only the actor policy group uses this history; the privileged critic remains an
+instantaneous full-state critic. This keeps the experiment focused on whether a
+memoryless MLP with short deployable history can infer trampoline phase and
+damping better than the previous instantaneous MLP+DR baseline.
+
+The initial $H=10$ setting was motivated by the fixed-condition evaluation
+statistics. Using the rough ballistic estimate
+\[
+    T_{\mathrm{period}}\approx \frac{20}{N_{\mathrm{apex}}},
+    \qquad
+    T_{\mathrm{air}}\approx 2\sqrt{\frac{2h_{\mathrm{apex}}}{g}},
+    \qquad
+    T_{\mathrm{stance}}\approx T_{\mathrm{period}}-T_{\mathrm{air}},
+\]
+the estimated trampoline support/control time is approximately
+$0.12$ s for $h^*=0.5$, $0.18$ s for $h^*=0.85$, and $0.22$ s for
+$h^*=1.2$. Grouping by stiffness gives about $0.21$ s for
+$E=2.0\times10^4$, $0.16$ s for $E=4.0\times10^4$, and $0.14$ s for
+$E=8.0\times10^4$. Thus a $0.2$ s observation-history window would cover most
+or all of the support phase for the current evaluation conditions. In practice,
+however, the flattened $H=10$ MLP struggled to discover valid apexes from
+scratch and converged toward a passive low-work behavior. The shorter $H=5$
+setting preserves some recent interaction information while reducing the actor
+input dimension and keeping early hopping exploration easier.
+
 \section{Apex Event and Metrics}
 
 A valid apex is detected by a root vertical velocity sign change gated by the
@@ -759,6 +799,44 @@ causes under-jumping, especially for $h^*=1.2$. This suggests that future
 adaptation methods should be evaluated on high-target/high-damping stress
 settings in addition to ordinary moderate-height tracking.
 
+\paragraph{Flattened-history MLP result.}
+A controlled comparison then evaluated the deployable MLP+DR baseline without
+actor history against the same policy class with flattened actor history
+$H=5$. The evaluation used the same $27$ fixed conditions above. Overall, the
+two methods were close, but $H=5$ did not produce a clear advantage:
+\[
+\begin{array}{c|cc}
+\text{metric} & \text{no history} & H=5 \\
+\hline
+\text{success rate} & 0.999 & 0.988 \\
+\mathrm{MAE}\ [\mathrm{m}] & 0.060 & 0.083 \\
+\mathrm{RMSE}\ [\mathrm{m}] & 0.065 & 0.088 \\
+\mathrm{bias}\ [\mathrm{m}] & -0.040 & -0.065 \\
+h/h^* & 0.967 & 0.946 \\
+W^+/h^* & 267 & 258 \\
+W^{\mathrm{abs}}/h^* & 351 & 339 \\
+\mathrm{xy\ drift}\ [\mathrm{m}] & 0.089 & 0.086
+\end{array}
+\]
+The short-history policy was slightly more energy-conservative and had similar
+xy drift, but it under-jumped more, especially in the high-target stress case.
+For $h^*=1.2$, the no-history MLP had
+\[
+    \mathrm{MAE}=0.140\ \mathrm{m},\qquad h/h^*=0.904,
+\]
+whereas the $H=5$ history MLP had
+\[
+    \mathrm{MAE}=0.213\ \mathrm{m},\qquad h/h^*=0.836.
+\]
+The $H=10$ history run was more problematic: it often failed to discover valid
+apexes and converged toward a passive behavior with low work but no sustained
+rebounding. This suggests that flattened history gives the MLP access to
+useful temporal information, but also increases the optimization burden and
+can encourage conservative under-jumping when energy penalties are active.
+Thus the next fair comparison should use a recurrent policy with the same
+instantaneous deployable observation rather than a longer flattened history
+vector.
+
 \paragraph{Observation-ablation hypothesis for RNN/RMA.}
 The earlier actor observed root position and base linear velocity. Those terms
 make the instantaneous observation highly informative: root height and vertical
@@ -806,13 +884,16 @@ mainly on energy efficiency, posture stability, and adaptation speed.
 \paragraph{Next adaptation sequence.}
 The next method-development sequence is:
 \begin{enumerate}
-    \item \textbf{MLP + observation history}: keep the deployable instantaneous
-    observation, stack a short window of recent observations/actions, and feed
-    the flattened vector to the same MLP policy. This is the simplest test of
-    whether recent interaction history reveals trampoline damping and timing.
-    \item \textbf{RNN policy}: replace the flattened history with a recurrent
-    policy state, e.g. GRU or LSTM. This tests whether learned memory improves
-    online adaptation over a fixed-length history window.
+    \item \textbf{MLP + observation history}: this has been tested with
+    flattened $H=5$ and $H=10$ actor history. It is useful as a simple
+    baseline, but did not clearly improve performance over the instantaneous
+    MLP and can encourage conservative under-jumping.
+    \item \textbf{RNN policy}: this is the next training run. It uses the same
+    instantaneous deployable observation as the no-history MLP, but replaces
+    flattened history with a recurrent policy state. The first implementation
+    uses a one-layer LSTM with hidden size $256$. This tests whether learned
+    memory improves online adaptation without inflating the actor input
+    dimension.
     \item \textbf{RMA}: train a teacher or privileged module with trampoline
     dynamics information, then train a deployable adaptation module that
     infers a latent dynamics code from history. This is the final paper-facing

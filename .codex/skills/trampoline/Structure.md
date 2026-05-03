@@ -44,8 +44,11 @@ This file is the current architecture map for trampoline-related work in
 - Valid apex detection uses vertical velocity sign change plus foot-clearance
   geometry, not contact sensors.
 - The actor observation is deployable: target command, projected gravity, base
-  angular velocity, joint state, and previous action. The critic remains
-  privileged with base position, quaternion, and linear velocity.
+  angular velocity, joint state, and previous action. The flattened-history MLP
+  ablation tested `history_length=5` and `history_length=10`; the next
+  experiment is an RNN policy with instantaneous deployable observations. The
+  critic remains privileged, instantaneous, and full-state with base position,
+  quaternion, and linear velocity.
 - The current trampoline DR parameters are Young's modulus, mass, dynamic
   friction, elasticity damping, damping scale, and Poisson ratio.
 
@@ -60,8 +63,8 @@ This file is the current architecture map for trampoline-related work in
 
 ## Next Research Sequence
 
-1. Keep deployable-observation MLP+DR as the current baseline.
-2. Add MLP observation history.
+1. Keep deployable-observation MLP+DR as the baseline.
+2. Treat flattened-history MLP as an ablation baseline.
 3. Test RNN policies under the same deployable observation.
 4. Move to RMA/latent dynamics estimation if history or recurrence shows a
    meaningful benefit.

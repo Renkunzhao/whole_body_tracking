@@ -19,7 +19,9 @@ motor work.
 - Valid apex is detected from root vertical velocity sign change plus
   kinematic foot clearance.
 - Reward and termination terms consume the command-owned valid-apex pulse.
-- Actor observation is deployable; critic observation is privileged.
+- Actor observation is deployable. The flattened-history MLP ablation tested
+  `history_length=5` and `history_length=10`; the critic observation is
+  privileged and instantaneous.
 
 ## Current Trampoline DR
 
@@ -44,7 +46,8 @@ Do not feed these true parameters directly to the deployable actor.
 ## Next Sequence
 
 1. MLP + deployable observation + DR baseline.
-2. MLP + observation/action history.
-3. RNN policy under the same observation.
+2. MLP + observation/action history ablation (`history_length=5` was close to
+   no-history; `history_length=10` often became passive).
+3. RNN policy under the same instantaneous deployable observation.
 4. RMA/latent dynamics estimator if temporal methods show benefit.
 5. Real-robot observation-noise measurement and corruption tuning.
