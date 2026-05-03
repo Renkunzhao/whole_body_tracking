@@ -26,6 +26,10 @@ Current baseline:
 - privileged critic with base state;
 - energy metrics/reward available; energy penalty is delayed until 1000 PPO
   iterations;
+- temporary valid-apex bootstrap bonus is active before 1000 PPO iterations and
+  then switched off by curriculum;
+- trampoline DR is delayed until 1000 PPO iterations; early resets use the
+  fixed trampoline `(E=8e4, mass=10, mu=0.8, damping=0.02, nu=0.35)`;
 - fixed-condition evaluation through `scripts/rsl_rl/eval-rebounce.py`.
 
 Near-term experiments:
@@ -46,6 +50,11 @@ Near-term experiments:
 ## Work Log
 
 - `YYYY-MM-DD`: Add new entries here in reverse chronological order.
+- `2026-05-03`: Delayed trampoline parameter randomization until 1000 PPO
+  iterations so early RNN training starts from the fixed trampoline that can
+  discover rebounding.
+- `2026-05-03`: Added a temporary valid-apex bootstrap reward for early
+  RNN/partial-observation training; it is disabled after 1000 PPO iterations.
 - `2026-05-02`: H=5 flattened-history MLP was close to no-history overall but
   under-jumped more at high target height; H=10 often became passive. Added
   RNN task/config as the next adaptation baseline.

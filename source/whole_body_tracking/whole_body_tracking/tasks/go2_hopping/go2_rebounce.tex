@@ -318,6 +318,7 @@ The weighted reward is
     R_t = \Delta t \Big(
         &-250\,r^{\mathrm{fail}}_t
         +50\,r^{\mathrm{apex}}_t \\
+        &+50\,r^{\mathrm{bootstrap}}_t \\
         &-1.5\times10^{-2}\,r^{\mathrm{energy}}_t \\
         &-2\,r^{\mathrm{orient}}_t
         -0.5\,r^{\mathrm{inplace}}_t
@@ -361,6 +362,18 @@ The apex pulse reward is
     \exp\left(-\left(\frac{e^{h,\mathrm{apex}}_t}{0.10}\right)^2\right)
     g^{\mathrm{flat}}_t.
 \end{equation}
+
+For early-stage RNN and partial-observation training, a temporary bootstrap
+bonus is added:
+\begin{equation}
+    r^{\mathrm{bootstrap}}_t =
+    \mathbb{I}[b^{\mathrm{valid}}_{t-1}].
+\end{equation}
+It is intentionally not a final objective. Its role is to make ``produce any
+valid apex'' a strong positive learning signal before the policy has discovered
+the rebound cycle. A curriculum sets the weight of this term to zero after
+$1000$ PPO iterations.
+
 The remaining penalties are standard orientation, action-rate, joint-deviation,
 and joint-position-limit regularizers. The in-place term penalizes drift from
 the reset xy position and reset yaw:
@@ -392,6 +405,12 @@ energy pulse of $W^{\mathrm{abs}}/h^{*}\approx 250$ contributes
     -1.5\times10^{-2}\cdot250\cdot0.02/20 \approx -0.00375
 \]
 to the logged \texttt{Episode\_Reward/energy\_penalty} for one valid apex.
+During the bootstrap phase, one valid apex also contributes
+\[
+    50 \cdot 0.02 / 20 = 0.05
+\]
+to \texttt{Episode\_Reward/valid\_apex\_bonus}; this term is switched off
+after the early discovery phase.
 
 \section{Implementation Files}
 
@@ -403,7 +422,7 @@ File & Purpose \\
 \texttt{go2\_rebounce\_env\_cfg.py} & scene, reset, reward, termination config \\
 \texttt{mdp/commands.py} & rebounce command, apex metrics, re-arm state, energy metrics \\
 \texttt{mdp/events.py} & reset from sampled drop height \\
-\texttt{mdp/rewards.py} & height reward, energy penalty, and failure pulses \\
+\texttt{mdp/rewards.py} & height reward, valid-apex bootstrap reward, energy penalty, and failure pulses \\
 \texttt{mdp/terminations.py} & timeout-without-apex termination \\
 \texttt{scripts/rsl\_rl/play-rebounce.py} & play script with apex height and energy printout \\
 \hline
@@ -522,8 +541,35 @@ With the current $\Delta t=0.02$ s, the current absolute-work trial weight is
 \[
     w_{\mathrm{energy}} = -1.5\times10^{-2}.
 \]
-For training stability, this weight is not active from the first iteration.
-The reward term starts with zero weight, and a curriculum switches it to
+The temporary valid-apex bootstrap reward starts with
+\[
+    w_{\mathrm{bootstrap}} = 50
+\]
+and is disabled after $1000$ PPO iterations:
+\[
+    N_{\mathrm{bootstrap}} = 1000 \times 24 = 24000
+\]
+manager steps. This makes the first part of training mainly about discovering
+the rebounding cycle. The bootstrap term should remain absent in final
+comparisons and ablations unless the experiment explicitly studies training
+curriculum.
+
+The trampoline-parameter randomization is also delayed to the same threshold.
+Before $24000$ manager steps, resets use a fixed trampoline
+\[
+    E=8.0\times10^4,\quad
+    m=10,\quad
+    \mu_d=0.8,\quad
+    d_e=0.02,\quad
+    \nu=0.35.
+\]
+After that point, reset-time randomization switches to the configured DR
+ranges. This keeps early RNN training close to the fixed-parameter setting that
+can already discover hopping, then introduces trampoline variation only after
+valid apexes are reachable.
+
+For training stability, the energy weight is not active from the first iteration.
+The energy reward term starts with zero weight, and a curriculum switches it to
 $-1.5\times10^{-2}$ after $1000$ PPO iterations. Since the PPO runner uses
 $24$ manager steps per iteration, the curriculum threshold is
 \[
@@ -595,10 +641,12 @@ $W^{-}_{\mathrm{episode}}/\max(W^{\mathrm{abs}}_{\mathrm{episode}},\epsilon)$ \\
 
 \subsection{Step 5: Add Trampoline Parameter Randomization}
 
-After the energy-optimized policy works on the fixed trampoline, introduce
-trampoline randomization. The current Go2 rebounce trampoline setup uses
-multi-parameter randomization over stiffness, mass, friction, material damping,
-and Poisson ratio:
+After the policy can discover rebounding on the fixed trampoline, introduce
+trampoline randomization. In the current training config, this is done as a
+curriculum: the first $1000$ PPO iterations use the fixed trampoline listed
+above, and only later resets sample the random ranges. The current Go2 rebounce
+trampoline setup uses multi-parameter randomization over stiffness, mass,
+friction, material damping, and Poisson ratio:
 \[
     \log E \sim
     \mathcal{U}\left(\log(2.0\times 10^4),\log(8.0\times 10^4)\right),

@@ -22,7 +22,8 @@ This file is the current architecture map for trampoline-related work in
   and energy metrics.
 - `source/whole_body_tracking/whole_body_tracking/tasks/go2_hopping/mdp/rewards.py`
   consumes command-owned apex pulses for height and energy rewards; the energy
-  reward weight is delayed by curriculum.
+  reward weight is delayed by curriculum, and a temporary valid-apex bootstrap
+  reward can be switched off by curriculum.
 - `source/whole_body_tracking/whole_body_tracking/tasks/go2_hopping/mdp/terminations.py`
   consumes command-owned apex pulses for no-valid-apex timeout.
 - `source/whole_body_tracking/whole_body_tracking/tasks/tracking/mdp/trampoline_events.py`
@@ -52,6 +53,10 @@ This file is the current architecture map for trampoline-related work in
   quaternion, and linear velocity.
 - The current trampoline DR parameters are Young's modulus, mass, dynamic
   friction, elasticity damping, damping scale, and Poisson ratio.
+- RNN/partial-observation training currently uses a temporary valid-apex bonus
+  for early discovery; it is disabled after 1000 PPO iterations.
+- Trampoline DR is also delayed until 1000 PPO iterations; early resets use a
+  fixed trampoline before the reset event begins sampling the DR ranges.
 
 ## Evaluation State
 

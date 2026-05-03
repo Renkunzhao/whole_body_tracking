@@ -153,6 +153,7 @@ def _set_fixed_play_condition(env_cfg):
 
     if events is not None and hasattr(events, "randomize_trampoline_properties"):
         params = events.randomize_trampoline_properties.params
+        params["randomization_start_step"] = 0
         if args_cli.youngs_modulus is not None:
             params["youngs_modulus_range"] = (args_cli.youngs_modulus, args_cli.youngs_modulus)
             params["youngs_modulus_distribution"] = "uniform"

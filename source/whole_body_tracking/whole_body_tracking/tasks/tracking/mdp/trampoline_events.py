@@ -130,9 +130,32 @@ class RandomizeTrampolineProperties(ManagerTermBase):
         elasticity_damping_range: tuple[float, float] | None = None,
         damping_scale_range: tuple[float, float] | None = None,
         poissons_ratio_range: tuple[float, float] | None = None,
+        randomization_start_step: int = 0,
+        fixed_youngs_modulus_range: tuple[float, float] | None = None,
+        fixed_mass_range: tuple[float, float] | None = None,
+        fixed_dynamic_friction_range: tuple[float, float] | None = None,
+        fixed_elasticity_damping_range: tuple[float, float] | None = None,
+        fixed_damping_scale_range: tuple[float, float] | None = None,
+        fixed_poissons_ratio_range: tuple[float, float] | None = None,
         asset_name: str = "trampoline",
     ) -> None:
         env_ids_tensor = _resolve_env_ids(env, env_ids)
+        use_fixed = randomization_start_step > 0 and env.common_step_counter < randomization_start_step
+        if use_fixed:
+            youngs_modulus_range = fixed_youngs_modulus_range or youngs_modulus_range
+            mass_range = fixed_mass_range if fixed_mass_range is not None else mass_range
+            dynamic_friction_range = (
+                fixed_dynamic_friction_range if fixed_dynamic_friction_range is not None else dynamic_friction_range
+            )
+            elasticity_damping_range = (
+                fixed_elasticity_damping_range
+                if fixed_elasticity_damping_range is not None
+                else elasticity_damping_range
+            )
+            damping_scale_range = fixed_damping_scale_range if fixed_damping_scale_range is not None else damping_scale_range
+            poissons_ratio_range = (
+                fixed_poissons_ratio_range if fixed_poissons_ratio_range is not None else poissons_ratio_range
+            )
 
         if youngs_modulus_distribution == "uniform":
             youngs_moduli = sample_uniform(

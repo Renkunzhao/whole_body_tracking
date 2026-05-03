@@ -305,6 +305,7 @@ def _set_condition(env, condition: dict[str, float | str]):
     trampoline_cfg.params["elasticity_damping_range"] = (elasticity_damping, elasticity_damping)
     trampoline_cfg.params["damping_scale_range"] = (damping_scale, damping_scale)
     trampoline_cfg.params["poissons_ratio_range"] = (poissons_ratio, poissons_ratio)
+    trampoline_cfg.params["randomization_start_step"] = 0
     if hasattr(unwrapped.cfg.events, "randomize_trampoline_properties"):
         params = unwrapped.cfg.events.randomize_trampoline_properties.params
         params["youngs_modulus_range"] = (youngs_modulus, youngs_modulus)
@@ -314,6 +315,7 @@ def _set_condition(env, condition: dict[str, float | str]):
         params["elasticity_damping_range"] = (elasticity_damping, elasticity_damping)
         params["damping_scale_range"] = (damping_scale, damping_scale)
         params["poissons_ratio_range"] = (poissons_ratio, poissons_ratio)
+        params["randomization_start_step"] = 0
 
 
 class EpisodeStats:

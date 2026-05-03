@@ -19,6 +19,10 @@ motor work.
 - Valid apex is detected from root vertical velocity sign change plus
   kinematic foot clearance.
 - Reward and termination terms consume the command-owned valid-apex pulse.
+- A temporary valid-apex bootstrap reward is active early in training and is
+  disabled after 1000 PPO iterations.
+- Trampoline DR is delayed until 1000 PPO iterations; before then resets use
+  the fixed trampoline values that work for rebound discovery.
 - Actor observation is deployable. The flattened-history MLP ablation tested
   `history_length=5` and `history_length=10`; the critic observation is
   privileged and instantaneous.
@@ -31,6 +35,11 @@ motor work.
 - `elasticity_damping`: uniform `(0.01, 0.1)`.
 - `damping_scale`: fixed `1.0`.
 - `poissons_ratio`: uniform `(0.25, 0.45)`.
+
+Training starts with fixed trampoline parameters
+`E=8.0e4`, `mass=10`, `dynamic_friction=0.8`,
+`elasticity_damping=0.02`, `damping_scale=1.0`, and
+`poissons_ratio=0.35`; reset-time DR begins after 1000 PPO iterations.
 
 Do not feed these true parameters directly to the deployable actor.
 

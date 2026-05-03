@@ -83,13 +83,13 @@
       "id": "rebounce_target_height",
       "type": "promptString",
       "description": "Type rebounce target height",
-      "default": "0.65"
+      "default": "0.85"
     },
     {
       "id": "rebounce_drop_height",
       "type": "promptString",
       "description": "Type rebounce reset drop height",
-      "default": "0.65"
+      "default": "0.85"
     },
     {
       "id": "trampoline_youngs_modulus",
@@ -190,7 +190,7 @@
         // "--video",
         // "--video_interval", "${input:video_interval}",
         // "--registry_name", "${input:ion}",
-        // "--wandb_path", "${input:wandb_path}",
+        "--wandb_path", "${input:wandb_path}",
         "--logger", "wandb", 
         "--log_project_name", "WBT", 
         "--run_name", "wbt-${input:output_name}"
