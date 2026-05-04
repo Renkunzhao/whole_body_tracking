@@ -30,8 +30,9 @@ Current baseline:
   then switched off by curriculum;
 - trampoline DR is delayed until 1000 PPO iterations; early resets use the
   fixed trampoline `(E=8e4, mass=10, mu=0.8, damping=0.02, nu=0.35)`;
-- teacher task variants can expose normalized true trampoline parameters to
-  the actor for privileged upper-bound/RMA experiments;
+- teacher task variants expose root position, base linear velocity, and
+  normalized true trampoline parameters to an instantaneous actor for
+  privileged upper-bound/RMA experiments;
 - fixed-condition evaluation through `scripts/rsl_rl/eval-rebounce.py`.
 
 Near-term experiments:
@@ -52,8 +53,9 @@ Near-term experiments:
 ## Work Log
 
 - `YYYY-MM-DD`: Add new entries here in reverse chronological order.
-- `2026-05-04`: Added teacher observation variants that append normalized true
-  trampoline parameters to actor and critic observations.
+- `2026-05-04`: Updated teacher observation variants to use instantaneous
+  privileged actor inputs: root position, base linear velocity, and normalized
+  true trampoline parameters.
 - `2026-05-03`: Delayed trampoline parameter randomization until 1000 PPO
   iterations so early RNN training starts from the fixed trampoline that can
   discover rebounding.

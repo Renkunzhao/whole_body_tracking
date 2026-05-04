@@ -217,11 +217,18 @@ class RecurrentObservationsCfg(ObservationsCfg):
 
 @configclass
 class TeacherObservationsCfg(ObservationsCfg):
-    """Teacher observations with true trampoline parameters in actor and critic."""
+    """Teacher observations with root state and true trampoline parameters."""
 
     @configclass
     class PolicyCfg(ObservationsCfg.PolicyCfg):
+        base_pos = ObsTerm(func=mdp.root_pos_w)
+        base_lin_vel = ObsTerm(func=mdp.base_lin_vel)
         trampoline_properties = ObsTerm(func=mdp.trampoline_properties)
+
+        def __post_init__(self):
+            super().__post_init__()
+            self.enable_corruption = False
+            self.history_length = 0
 
     @configclass
     class PrivilegedCfg(ObservationsCfg.PrivilegedCfg):
@@ -233,11 +240,17 @@ class TeacherObservationsCfg(ObservationsCfg):
 
 @configclass
 class RecurrentTeacherObservationsCfg(RecurrentObservationsCfg):
-    """Recurrent teacher observations with true trampoline parameters."""
+    """Recurrent teacher observations with root state and true trampoline parameters."""
 
     @configclass
     class PolicyCfg(RecurrentObservationsCfg.PolicyCfg):
+        base_pos = ObsTerm(func=mdp.root_pos_w)
+        base_lin_vel = ObsTerm(func=mdp.base_lin_vel)
         trampoline_properties = ObsTerm(func=mdp.trampoline_properties)
+
+        def __post_init__(self):
+            super().__post_init__()
+            self.enable_corruption = False
 
     @configclass
     class PrivilegedCfg(RecurrentObservationsCfg.PrivilegedCfg):

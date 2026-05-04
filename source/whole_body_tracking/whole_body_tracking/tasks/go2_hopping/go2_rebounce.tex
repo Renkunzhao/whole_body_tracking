@@ -181,9 +181,11 @@ remains deployable. The policy action is a 12-DoF joint-position target action
 with the default Go2 joint offset. In the trampoline variant, a separate action
 term keeps the trampoline rim pinned.
 
-\paragraph{Privileged trampoline-parameter teacher observation.}
+\paragraph{Privileged teacher observation.}
 For teacher-policy and RMA-style experiments, a privileged actor observation
-variant appends the true randomized trampoline parameters:
+variant uses instantaneous simulator state and dynamics parameters. In addition
+to the deployable actor terms, the teacher actor receives root position, base
+linear velocity, and the true randomized trampoline parameters:
 \[
     \bm{o}^{\mathrm{tramp}} =
     \left[
@@ -194,10 +196,11 @@ variant appends the true randomized trampoline parameters:
         \log(d_e/d_{e,0})
     \right].
 \]
-This term is used only by teacher tasks and is not part of the deployable actor
-observation. Its purpose is to test the upper-bound performance of a policy
-that knows the trampoline dynamics, and to provide a target for later latent
-dynamics estimation.
+The teacher observation uses no actor history ($H=0$) and no observation
+corruption. These terms are used only by teacher tasks and are not part of the
+deployable actor observation. Their purpose is to test the upper-bound
+performance of a policy that knows the robot root state and trampoline
+dynamics, and to provide a target for later latent dynamics estimation.
 
 \paragraph{Observation history.}
 The current history-MLP experiment enables actor observation history with

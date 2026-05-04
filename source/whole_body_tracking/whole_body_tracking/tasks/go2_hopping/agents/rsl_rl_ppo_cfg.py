@@ -9,7 +9,7 @@ from isaaclab_rl.rsl_rl import (
 
 @configclass
 class Go2HoppingPPORunnerCfg(RslRlOnPolicyRunnerCfg):
-    num_steps_per_env = 64
+    num_steps_per_env = 24
     max_iterations = 30000
     save_interval = 100
     experiment_name = "go2_hopping"
@@ -38,6 +38,7 @@ class Go2HoppingPPORunnerCfg(RslRlOnPolicyRunnerCfg):
 
 @configclass
 class Go2HoppingRecurrentPPORunnerCfg(Go2HoppingPPORunnerCfg):
+    num_steps_per_env = 64
     policy = RslRlPpoActorCriticRecurrentCfg(
         init_noise_std=1.0,
         actor_hidden_dims=[512, 256, 128],

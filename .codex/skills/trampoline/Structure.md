@@ -57,9 +57,10 @@ This file is the current architecture map for trampoline-related work in
   for early discovery; it is disabled after 1000 PPO iterations.
 - Trampoline DR is also delayed until 1000 PPO iterations; early resets use a
   fixed trampoline before the reset event begins sampling the DR ranges.
-- Teacher variants can append normalized true trampoline parameters to actor
-  observations as privileged upper bounds/RMA teachers; deployable actors
-  should not use these parameters directly.
+- Teacher variants append root position, base linear velocity, and normalized
+  true trampoline parameters to instantaneous actor observations as privileged
+  upper bounds/RMA teachers; deployable actors should not use these terms
+  directly.
 
 ## Evaluation State
 
