@@ -42,6 +42,9 @@ Training starts with fixed trampoline parameters
 `poissons_ratio=0.35`; reset-time DR begins after 1000 PPO iterations.
 
 Do not feed these true parameters directly to the deployable actor.
+Teacher task variants may append normalized true trampoline parameters
+`[youngs_modulus, mass, poissons_ratio, dynamic_friction, elasticity_damping]`
+to the actor observation as privileged upper bounds or RMA teachers.
 
 ## Evaluation
 

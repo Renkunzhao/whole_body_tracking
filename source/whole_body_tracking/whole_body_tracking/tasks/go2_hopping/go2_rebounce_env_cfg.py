@@ -216,6 +216,38 @@ class RecurrentObservationsCfg(ObservationsCfg):
 
 
 @configclass
+class TeacherObservationsCfg(ObservationsCfg):
+    """Teacher observations with true trampoline parameters in actor and critic."""
+
+    @configclass
+    class PolicyCfg(ObservationsCfg.PolicyCfg):
+        trampoline_properties = ObsTerm(func=mdp.trampoline_properties)
+
+    @configclass
+    class PrivilegedCfg(ObservationsCfg.PrivilegedCfg):
+        trampoline_properties = ObsTerm(func=mdp.trampoline_properties)
+
+    policy: PolicyCfg = PolicyCfg()
+    critic: PrivilegedCfg = PrivilegedCfg()
+
+
+@configclass
+class RecurrentTeacherObservationsCfg(RecurrentObservationsCfg):
+    """Recurrent teacher observations with true trampoline parameters."""
+
+    @configclass
+    class PolicyCfg(RecurrentObservationsCfg.PolicyCfg):
+        trampoline_properties = ObsTerm(func=mdp.trampoline_properties)
+
+    @configclass
+    class PrivilegedCfg(RecurrentObservationsCfg.PrivilegedCfg):
+        trampoline_properties = ObsTerm(func=mdp.trampoline_properties)
+
+    policy: PolicyCfg = PolicyCfg()
+    critic: PrivilegedCfg = PrivilegedCfg()
+
+
+@configclass
 class EventCfg:
     """Configuration for events."""
 
@@ -472,7 +504,21 @@ class Go2RebounceTrampolineEnvCfg(Go2RebounceEnvCfg):
 
 
 @configclass
+class Go2RebounceTrampolineTeacherEnvCfg(Go2RebounceTrampolineEnvCfg):
+    """Trampoline rebounce teacher with true trampoline parameters in actor observations."""
+
+    observations: TeacherObservationsCfg = TeacherObservationsCfg()
+
+
+@configclass
 class Go2RebounceTrampolineRnnEnvCfg(Go2RebounceTrampolineEnvCfg):
     """Trampoline rebounce with recurrent policy observations."""
 
     observations: RecurrentObservationsCfg = RecurrentObservationsCfg()
+
+
+@configclass
+class Go2RebounceTrampolineRnnTeacherEnvCfg(Go2RebounceTrampolineEnvCfg):
+    """Recurrent trampoline rebounce teacher with true trampoline parameters."""
+
+    observations: RecurrentTeacherObservationsCfg = RecurrentTeacherObservationsCfg()

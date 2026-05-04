@@ -9,7 +9,7 @@ from isaaclab_rl.rsl_rl import (
 
 @configclass
 class Go2HoppingPPORunnerCfg(RslRlOnPolicyRunnerCfg):
-    num_steps_per_env = 24
+    num_steps_per_env = 64
     max_iterations = 30000
     save_interval = 100
     experiment_name = "go2_hopping"
