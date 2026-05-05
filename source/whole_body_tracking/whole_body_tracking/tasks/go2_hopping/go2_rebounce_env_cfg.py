@@ -50,8 +50,8 @@ VELOCITY_RANGE = {
     "yaw": (-0.78, 0.78),
 }
 REBOUNCE_HEIGHT_RANGE = (0.5, 1.2)
-REBOUNCE_OBS_HISTORY_LENGTH = 5
-HOPPING_INIT_STEP = 300 * 24
+REBOUNCE_OBS_HISTORY_LENGTH = 0
+HOPPING_INIT_STEP = 00 * 24
 TRAMPOLINE_DR_YOUNGS_MODULUS_RANGE = (2.0e4, 8.0e4)
 TRAMPOLINE_DR_MASS_RANGE = (5.0, 15.0)
 TRAMPOLINE_DR_DYNAMIC_FRICTION_RANGE = (0.4, 1.2)
@@ -222,6 +222,7 @@ class TeacherObservationsCfg(ObservationsCfg):
     @configclass
     class PolicyCfg(ObservationsCfg.PolicyCfg):
         base_pos = ObsTerm(func=mdp.root_pos_w)
+        base_quat = ObsTerm(func=mdp.root_quat_w,params={"make_quat_unique": True})
         base_lin_vel = ObsTerm(func=mdp.base_lin_vel)
         trampoline_properties = ObsTerm(func=mdp.trampoline_properties)
 
