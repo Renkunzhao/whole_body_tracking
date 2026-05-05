@@ -396,6 +396,7 @@ class EpisodeStats:
             "reason": reason,
             "apex": self.apex_count,
             "matched": self.height_matched_count,
+            "height_success_rate": self.height_matched_count / max(self.apex_count, 1),
             "mae": _mean(self.height_abs_errors),
             "rmse": _rmse(self.height_errors),
             "bias": _mean(self.height_errors),
@@ -426,6 +427,7 @@ def _aggregate(condition: dict[str, float | str], episodes: list[dict[str, float
     metric_names = [
         "apex",
         "matched",
+        "height_success_rate",
         "mae",
         "rmse",
         "bias",
@@ -453,6 +455,7 @@ def _print_episode(condition: dict[str, float | str], episode_index: int, stats:
         f"[EP {episode_index:04d}] {condition['condition_name']} "
         f"E={condition['youngs_modulus']:.2e} h={condition['target_height']:.2f} "
         f"ok={int(stats['success'])} reason={stats['reason']} apex={stats['apex']} "
+        f"match={stats['matched']}/{stats['apex']} "
         f"mae={_fmt(stats['mae'])} bias={_fmt(stats['bias'])} h/t={_fmt(stats['h_over_target'])} "
         f"posT={_fmt(stats['pos_target'], 1)} absT={_fmt(stats['abs_target'], 1)}",
         flush=True,
@@ -467,6 +470,7 @@ def _print_condition_result(result: dict[str, float | str]):
         f"mu={result['dynamic_friction']:.2f} damp={result['elasticity_damping']:.3f} "
         f"ds={result['damping_scale']:.2f} nu={result['poissons_ratio']:.2f} "
         f"success={100.0 * result['success_rate']:.1f}% fail={result['failure_distribution']} "
+        f"h_success={100.0 * result['height_success_rate_mean']:.1f}% "
         f"apex={_fmt(result['apex_mean'])}±{_fmt(result['apex_std'])} "
         f"mae={_fmt(result['mae_mean'])}±{_fmt(result['mae_std'])} "
         f"bias={_fmt(result['bias_mean'])}±{_fmt(result['bias_std'])} "

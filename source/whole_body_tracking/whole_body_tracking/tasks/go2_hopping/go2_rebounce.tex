@@ -38,14 +38,17 @@ show repeated cycles of
 
 \section{Environment Variants}
 
-Two environment IDs are used:
+The main environment IDs are:
 \begin{center}
 \begin{tabular}{lll}
 \hline
 ID & Scene & Notes \\
 \hline
 \texttt{Go2-Rebounce-Flat} & rigid plane & 4096 envs, env spacing $2.5$ m \\
-\texttt{Go2-Rebounce-Trampoline} & deformable trampoline & 2048 envs, env spacing $4.0$ m \\
+\texttt{Go2-Rebounce-Trampoline} & deformable trampoline & instantaneous deployable actor \\
+\texttt{Go2-Rebounce-Trampoline-history} & deformable trampoline & flattened actor history, $H=5$ \\
+\texttt{Go2-Rebounce-Trampoline-RNN} & deformable trampoline & recurrent actor, no flattened history \\
+\texttt{Go2-Rebounce-Trampoline-Teacher} & deformable trampoline & privileged actor upper bound \\
 \hline
 \end{tabular}
 \end{center}
@@ -203,7 +206,10 @@ performance of a policy that knows the robot root state and trampoline
 dynamics, and to provide a target for later latent dynamics estimation.
 
 \paragraph{Observation history.}
-The current history-MLP experiment enables actor observation history with
+The base \texttt{Go2-Rebounce-Trampoline} environment uses the instantaneous
+deployable actor observation. The separate
+\texttt{Go2-Rebounce-Trampoline-history} environment enables actor observation
+history with
 \[
     H = 5
 \]
@@ -302,7 +308,7 @@ Metric & Condition & Interpretation \\
 \hline
 \texttt{apex\_count} & $b^{\mathrm{valid}}_t$ & valid apex count \\
 \texttt{height\_matched\_apex\_count} &
-$b^{\mathrm{valid}}_t \wedge |h_t-h^{*}|<0.25$ &
+$b^{\mathrm{valid}}_t \wedge |h_t-h^{*}|<0.05$ &
 apex count close to target height \\
 \texttt{error\_peak\_height} &
 mean $|h_t-h^{*}|$ over counted apexes &
@@ -469,16 +475,22 @@ state, run ID, checkpoint, and videos. The expected healthy indicators are:
 
 \subsection{Step 1: Decouple Initial Drop Height from Target Apex Height}
 
-This has been implemented in the current setup. The target height and the
-initial release height are no longer the same sampled scalar:
+This has been implemented in the current setup. The target apex height and
+the initial drop height are sampled independently from the same range during
+training:
 \[
-    h^{*} \sim \mathcal{U}(0.5,0.8), \qquad
-    h_{\mathrm{drop}} \sim \mathcal{U}(0.5,0.8).
+    h^{*} \sim \mathcal{U}(0.5, 1.2), \qquad
+    h_{\mathrm{drop}} \sim \mathcal{U}(0.5, 1.2).
 \]
 The height rewards and metrics now compare apex height against $h^{*}$ rather
 than against $h_{\mathrm{drop}}$. This tests whether the policy controls
 rebound height, rather than only recovering to the height from which it was
 dropped.
+
+For fixed-condition evaluation, the eval script sets
+$h_{\mathrm{drop}}=h^{*}$ by default unless \texttt{drop\_height} is explicitly
+swept. This removes one nuisance variable when comparing policies across
+trampoline parameters.
 
 \subsection{Step 2: Add In-Place Hopping}
 
@@ -919,6 +931,156 @@ Thus the next fair comparison should use a recurrent policy with the same
 instantaneous deployable observation rather than a longer flattened history
 vector.
 
+\paragraph{Privileged teacher result.}
+A privileged teacher policy was trained with the actor observation
+$\bm{o}^{\mathrm{teacher}}$ that adds world root position, base linear
+velocity, and the standardized trampoline parameter vector
+$\bm{o}^{\mathrm{tramp}}$ to the deployable observation. The teacher does
+not use the bootstrap curriculum. On the same $27$ fixed conditions as the
+deployable MLP+DR baseline, the teacher achieves uniformly better tracking,
+posture, and energy efficiency:
+\[
+\begin{array}{c|cc}
+\text{metric} & \text{baseline} & \text{teacher} \\
+\hline
+\text{success rate} & 0.999 & 0.989 \\
+\mathrm{MAE}\ [\mathrm{m}] & 0.060 & 0.018 \\
+\mathrm{bias}\ [\mathrm{m}] & -0.040 & -0.009 \\
+h/h^* & 0.967 & 0.988 \\
+W^+/h^* & 267 & 231 \\
+W^{\mathrm{abs}}/h^* & 351 & 337 \\
+\mathrm{xy\ drift}\ [\mathrm{m}] & 0.089 & 0.030 \\
+\mathrm{orientation\ rms} & 0.110 & 0.066
+\end{array}
+\]
+The most important difference is at the high-target high-damping stress
+condition. The baseline systematically under-jumps at $h^*=1.2$ with
+$h/h^*=0.904$, and at $(h^*,E,d_e)=(1.2,2.0\times 10^4,0.10)$ it survives
+the full episode but never matches the target
+($\mathtt{matched}=0$, $h/h^*=0.736$). The teacher recovers tracking
+under the same conditions, with $h/h^*=0.985$ averaged across $h^*=1.2$,
+even while occasionally falling at the softest, highest-damping corner.
+This indicates that explicit knowledge of trampoline stiffness, mass,
+damping, friction, and Poisson ratio is sufficient to reach commanded
+heights at high-stress conditions where a memoryless deployable policy
+cannot. The teacher's residual failures at $(h^*=1.2, d_e=0.10)$ are
+honest base-orientation falls rather than the baseline's "alive but not
+tracking" mode, so the success-rate gap should be read together with the
+matched-apex count: a slightly lower success rate with $\mathtt{matched}
+\approx \mathtt{apex}$ is preferable to perfect survival with
+$\mathtt{matched}=0$.
+
+\paragraph{Reward exploitation by the teacher at low damping.}
+The teacher does not, however, track every condition equally well. At
+$h^*=0.5$ with $d_e=0.01$ it systematically under-jumps with
+$h/h^*\in[0.93, 0.97]$, while bouncing far more frequently than the
+baseline:
+\[
+\begin{array}{c|cccc}
+(h^*=0.5, d_e=0.01) &
+\mathrm{apex}_{\mathrm{teacher}} &
+\mathrm{apex}_{\mathrm{base}} &
+(h/h^*)_{\mathrm{teacher}} &
+W^+/h^*_{\mathrm{teacher}} \\
+\hline
+E=2.0\times 10^4 & 29.1 & 24.5 & 0.932 & 146 \\
+E=4.0\times 10^4 & 34.0 & 26.0 & 0.975 & 105 \\
+E=8.0\times 10^4 & 40.0 & 28.0 & 0.962 & \hphantom{0}77
+\end{array}
+\]
+This is a deliberate reward-shape exploit, not a tracking failure. The
+energy penalty $-1.5\times 10^{-2}\,W^+/h^*$ is normalized by the
+commanded $h^*$, so under-shooting does not increase the energy cost
+denominator. With low damping the trampoline returns most of the impact
+energy elastically and the natural bounce frequency is high, so each
+additional valid apex event costs almost no extra joint work. For the
+teacher at $E=2.0\times 10^4$, $h^*=0.5$, $d_e=0.01$ the per-apex net
+contribution to the raw reward stream is approximately
+\[
+50\,\exp\!\left(-(0.034/0.10)^2\right)
+- 1.5\times 10^{-2}\cdot 146
+\approx 42.3,
+\]
+giving an episode-aggregate of $29.1\times 42.3\approx 1230$ versus the
+baseline's $24.5\times 44.7\approx 1095$. The teacher prefers
+high-frequency low-amplitude bouncing whenever the commanded height is
+low and the trampoline is elastic, because it can use the privileged
+trampoline parameters to identify these conditions and trade a small
+height tracking error for an extra apex pulse on every cycle. The exploit
+disappears at higher targets or higher damping because the trampoline
+absorbs energy and the policy must inject active work to maintain any
+rebound. Possible reward design changes that would close this loophole
+are: tightening the apex pulse standard deviation
+($\sigma=0.10\to 0.05$), normalizing energy by the achieved apex height
+$h_k^{\mathrm{apex}}$ instead of $h^*_k$, or replacing the soft Gaussian
+apex pulse with a hard tolerance gate. The current setup keeps the
+loophole open because the teacher's behavior is informative — it
+identifies a Pareto front of "track exactly versus exploit elasticity"
+that is otherwise hidden in the metrics, and motivates an energy-penalty
+redesign for future runs.
+
+\paragraph{Bootstrap reward ablation.}
+The bootstrap reward $r^{\mathrm{bootstrap}}_t$ defined earlier was
+introduced to help architectures that fail to self-discover rebounding.
+Empirically, the flattened $H=10$ MLP found no valid apex without
+bootstrap and converged to a passive low-work behavior; the bootstrap
+addresses this by giving a strong height-agnostic positive signal — any
+valid apex is rewarded with $+50$ regardless of the commanded height,
+while the energy penalty is held at zero during the bootstrap window.
+After the curriculum threshold the bootstrap is removed and the energy
+penalty is enabled. A direct ablation on the deployable MLP+DR baseline
+shows the bootstrap is harmful for architectures that can already
+self-discover rebounding. On the same $27$-condition sweep:
+\[
+\begin{array}{c|cc}
+\text{metric} & \text{no bootstrap} & \text{with bootstrap} \\
+\hline
+\text{success rate} & 0.999 & 0.979 \\
+\mathrm{MAE}\ [\mathrm{m}] & 0.060 & 0.086 \\
+h/h^* & 0.967 & 0.944 \\
+W^+/h^* & 267 & 291 \\
+\mathrm{orientation\ rms} & 0.110 & 0.147
+\end{array}
+\]
+At $(h^*=1.2, d_e=0.10)$ for every $E$, the bootstrap-trained baseline has
+$\mathtt{success\_rate}=1$ but $\mathtt{matched}\le 3$ out of
+$\mathtt{apex}\approx 21$, with $h/h^*\in[0.50, 0.63]$. The same
+conditions in the no-bootstrap baseline have $h/h^*\in[0.74, 0.83]$ and
+similarly low matched count, so the failure mode existed already but is
+amplified by the bootstrap.
+
+The mechanism is that
+$r^{\mathrm{bootstrap}}_t=\mathbb{I}[b^{\mathrm{valid}}_{t-1}]$ is
+decoupled from the commanded height. During the bootstrap window the
+optimal strategy is to trigger as many valid apex events as possible at
+any height, while the energy penalty is off. This drives the policy into
+a low-amplitude high-frequency bouncing mode. After the curriculum
+switches off the bootstrap and switches on the energy penalty, a
+partially observable policy cannot specialize behavior to trampoline
+conditions and remains trapped in this mode, especially at high targets
+where the gap between the bootstrap-era strategy and the commanded height
+is large. The teacher does not have this problem because it does not use
+the bootstrap curriculum and because the trampoline observation gives it
+the means to specialize. The no-bootstrap baseline does not have this
+problem because it never learned the height-agnostic attractor — the
+height-tracking and energy-conservation signals were both active from
+step $0$, and the policy converged to a Pareto solution rather than
+transitioning through a height-agnostic phase.
+
+The implication is that the current bootstrap is a "first-aid" mechanism
+specifically for architectures that fail to self-discover rebounding —
+RNN policies and long-history MLPs. It should not be applied to the
+simple MLP+DR baseline or to the teacher. A redesigned bootstrap that
+scales with a wide Gaussian on apex height,
+\[
+r^{\mathrm{bootstrap,wide}}_t =
+\mathbb{I}[b^{\mathrm{valid}}_{t-1}]\,
+\exp\!\left(-(e^{h,\mathrm{apex}}_t/0.5)^2\right),
+\]
+would keep the discovery signal while removing the height-agnostic
+attractor, and could in principle benefit all architectures uniformly.
+This is left for a future RNN training run.
+
 \paragraph{Observation-ablation hypothesis for RNN/RMA.}
 The earlier actor observed root position and base linear velocity. Those terms
 make the instantaneous observation highly informative: root height and vertical
@@ -1017,7 +1179,11 @@ counts or fractions of each failed-termination reason & failure diagnosis \\
 \texttt{apex\_count\_per\_20s} &
 number of valid apexes in one rollout & sustained hopping frequency \\
 \texttt{height\_matched\_apex\_count} &
-number of valid apexes satisfying the height tolerance & useful successful hops \\
+number of valid apexes with $|h_k-h^*_k|<0.05$\,m & strict tracking
+hops \\
+\texttt{height\_success\_rate} &
+\texttt{height\_matched\_apex\_count}/\texttt{apex\_count\_per\_20s} &
+fraction of hops that strictly track the target \\
 \texttt{height\_mae} &
 $K^{-1}\sum_{k=1}^{K}|h_k-h^*_k|$ over valid apexes in the rollout &
 absolute tracking accuracy \\
@@ -1051,6 +1217,20 @@ be excluded from the successful-rollout mean or reported as undefined. For
 energy metrics, the target-height denominator is preferred for method
 comparison because it does not reward jumping higher than commanded; achieved
 height normalization can still be logged as an efficiency diagnostic.
+
+\paragraph{Reporting note: success rate is not enough.}
+A successful rollout (\texttt{time\_out}=1) only certifies that the robot
+survived the $20$ s episode without a failure termination, not that it
+actually tracked the commanded height. In the bootstrap and no-bootstrap
+baseline ablations, multiple conditions at $(h^*=1.2, d_e=0.10)$ have
+\texttt{success\_rate}=1 with \texttt{height\_success\_rate}$\,<0.1$ — the
+policy stays alive by passive low-amplitude bouncing without ever reaching
+the target. To prevent this pitfall, all method comparisons should report
+\texttt{success\_rate} alongside \texttt{height\_success\_rate}; the latter
+acts as the strict task-completion metric, while the former captures
+survival. Tightening the apex tolerance from $0.25$\,m to $0.05$\,m makes
+\texttt{height\_success\_rate} a meaningful tracking quality indicator
+rather than a near-trivial survival proxy.
 
 \subsection{TODO: Real-Robot Observation Noise Measurement}
 

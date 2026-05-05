@@ -50,7 +50,7 @@ VELOCITY_RANGE = {
     "yaw": (-0.78, 0.78),
 }
 REBOUNCE_HEIGHT_RANGE = (0.5, 1.2)
-REBOUNCE_OBS_HISTORY_LENGTH = 0
+REBOUNCE_OBS_HISTORY_LENGTH = 5
 HOPPING_INIT_STEP = 00 * 24
 TRAMPOLINE_DR_YOUNGS_MODULUS_RANGE = (2.0e4, 8.0e4)
 TRAMPOLINE_DR_MASS_RANGE = (5.0, 15.0)
@@ -130,7 +130,7 @@ class CommandsCfg:
         foot_asset_cfg=SceneEntityCfg("robot", body_names=list(GO2_FOOT_BODY_NAMES)),
         foot_clearance=0.08,
         surface_z=0.0,
-        apex_height_tolerance=0.25,
+        apex_height_tolerance=0.05,
         # Initial target is sampled by the reset event so it can be decoupled
         # from the initial drop height. During a 20 s rollout, resample the
         # target at most about once to test command adaptation.
@@ -176,7 +176,7 @@ class ObservationsCfg:
         def __post_init__(self):
             self.enable_corruption = True
             self.concatenate_terms = True
-            self.history_length = REBOUNCE_OBS_HISTORY_LENGTH
+            self.history_length = 0
             self.flatten_history_dim = True
 
     @configclass
@@ -193,6 +193,20 @@ class ObservationsCfg:
     # observation groups
     policy: PolicyCfg = PolicyCfg()
     critic: PrivilegedCfg = PrivilegedCfg()
+
+
+@configclass
+class HistoryObservationsCfg(ObservationsCfg):
+    """Deployable observations with flattened actor history for MLP ablations."""
+
+    @configclass
+    class PolicyCfg(ObservationsCfg.PolicyCfg):
+        def __post_init__(self):
+            super().__post_init__()
+            self.history_length = REBOUNCE_OBS_HISTORY_LENGTH
+
+    policy: PolicyCfg = PolicyCfg()
+    critic: ObservationsCfg.PrivilegedCfg = ObservationsCfg.PrivilegedCfg()
 
 
 @configclass
@@ -515,6 +529,13 @@ class Go2RebounceTrampolineEnvCfg(Go2RebounceEnvCfg):
     scene: TrampolineSceneCfg = TrampolineSceneCfg(num_envs=2048, env_spacing=4.0, replicate_physics=False)
     actions: TrampolineActionsCfg = TrampolineActionsCfg()
     events: TrampolineEventCfg = TrampolineEventCfg()
+
+
+@configclass
+class Go2RebounceTrampolineHistoryEnvCfg(Go2RebounceTrampolineEnvCfg):
+    """Trampoline rebounce with flattened actor observation history."""
+
+    observations: HistoryObservationsCfg = HistoryObservationsCfg()
 
 
 @configclass

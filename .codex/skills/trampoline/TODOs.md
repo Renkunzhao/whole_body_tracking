@@ -20,9 +20,10 @@ Current baseline:
 - deformable trampoline with rim pinning;
 - independent drop height and target apex height;
 - command-owned valid-apex state machine;
-- deployable actor observation without base position or base linear velocity;
-- flattened-history MLP ablation completed for `history_length=5` and
-  `history_length=10`;
+- deployable instantaneous actor observation without base position or base
+  linear velocity;
+- separate `Go2-Rebounce-Trampoline-history` env for flattened-history MLP
+  ablations (`history_length=5`);
 - privileged critic with base state;
 - energy metrics/reward available; energy penalty is delayed until 1000 PPO
   iterations;
@@ -53,6 +54,9 @@ Near-term experiments:
 ## Work Log
 
 - `YYYY-MM-DD`: Add new entries here in reverse chronological order.
+- `2026-05-05`: Split the flattened-history MLP ablation into a separate
+  `Go2-Rebounce-Trampoline-history` environment; the base trampoline task is
+  now instantaneous deployable observation.
 - `2026-05-04`: Updated teacher observation variants to use instantaneous
   privileged actor inputs: root position, base linear velocity, and normalized
   true trampoline parameters.

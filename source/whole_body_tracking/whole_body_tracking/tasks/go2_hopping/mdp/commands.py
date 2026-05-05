@@ -406,7 +406,7 @@ class UniformRebounceCommandCfg(CommandTermCfg):
     foot_asset_cfg: SceneEntityCfg | None = None
     foot_clearance: float = 0.0
     surface_z: float = 0.0
-    apex_height_tolerance: float = 0.25
+    apex_height_tolerance: float = 0.05
 
     @configclass
     class Ranges:

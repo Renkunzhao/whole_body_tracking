@@ -23,9 +23,9 @@ motor work.
   disabled after 1000 PPO iterations.
 - Trampoline DR is delayed until 1000 PPO iterations; before then resets use
   the fixed trampoline values that work for rebound discovery.
-- Actor observation is deployable. The flattened-history MLP ablation tested
-  `history_length=5` and `history_length=10`; the critic observation is
-  privileged and instantaneous.
+- The base actor observation is deployable and instantaneous. The
+  `Go2-Rebounce-Trampoline-history` variant uses flattened actor history with
+  `history_length=5`; the critic observation is privileged and instantaneous.
 
 ## Current Trampoline DR
 
@@ -60,7 +60,8 @@ as upper bounds or RMA teachers.
 ## Next Sequence
 
 1. MLP + deployable observation + DR baseline.
-2. MLP + observation/action history ablation (`history_length=5` was close to
+2. MLP + observation/action history ablation through
+   `Go2-Rebounce-Trampoline-history` (`history_length=5` was close to
    no-history; `history_length=10` often became passive).
 3. RNN policy under the same instantaneous deployable observation.
 4. RMA/latent dynamics estimator if temporal methods show benefit.

@@ -45,12 +45,13 @@ This file is the current architecture map for trampoline-related work in
 - The command term is the single owner of apex state.
 - Valid apex detection uses vertical velocity sign change plus foot-clearance
   geometry, not contact sensors.
-- The actor observation is deployable: target command, projected gravity, base
-  angular velocity, joint state, and previous action. The flattened-history MLP
-  ablation tested `history_length=5` and `history_length=10`; the next
-  experiment is an RNN policy with instantaneous deployable observations. The
-  critic remains privileged, instantaneous, and full-state with base position,
-  quaternion, and linear velocity.
+- The base actor observation is deployable and instantaneous: target command,
+  projected gravity, base angular velocity, joint state, and previous action.
+  `Go2-Rebounce-Trampoline-history` is the separate flattened-history MLP
+  environment (`history_length=5`). RNN policies use instantaneous deployable
+  observations plus recurrent state. The critic remains privileged,
+  instantaneous, and full-state with base position, quaternion, and linear
+  velocity.
 - The current trampoline DR parameters are Young's modulus, mass, dynamic
   friction, elasticity damping, damping scale, and Poisson ratio.
 - RNN/partial-observation training currently uses a temporary valid-apex bonus
