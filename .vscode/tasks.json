@@ -45,7 +45,6 @@
         "Go2-Hopping-Trampoline",
         "Go2-Rebounce-Flat",
         "Go2-Rebounce-Trampoline",
-        "Go2-Rebounce-Trampoline-history",
         "Go2-Rebounce-Trampoline-Teacher",
         "Go2-Rebounce-Trampoline-RNN",
         "Go2-Rebounce-Trampoline-RNN-Teacher",
@@ -179,7 +178,7 @@
       "problemMatcher": []
     },
     {
-      "label": "Train",
+      "label": "Train (GPU 0)",
       "type": "shell",
       "command": "conda",
       "args": [
@@ -194,11 +193,35 @@
         // "--video_interval", "${input:video_interval}",
         // "--registry_name", "${input:ion}",
         // "--wandb_path", "${input:wandb_path}",
-        "--logger", "wandb", 
-        "--log_project_name", "WBT", 
+        "--logger", "wandb",
+        "--log_project_name", "WBT",
         "--run_name", "wbt-${input:output_name}"
       ],
-      "options": { "cwd": "${workspaceFolder}/scripts" },
+      "options": { "cwd": "${workspaceFolder}/scripts", "env": { "CUDA_VISIBLE_DEVICES": "0" } },
+      "problemMatcher": []
+    },
+    {
+      "label": "Train (GPU 1)",
+      "type": "shell",
+      "command": "conda",
+      "args": [
+        "run",
+        "--no-capture-output",
+        "-n", "isaaclab",
+        "python", "rsl_rl/train.py",
+        "--task", "${input:Task}",
+        "--headless",
+        // "env.viewer.origin_type=world",
+        // "--video",
+        // "--video_interval", "${input:video_interval}",
+        // "--registry_name", "${input:ion}",
+        // "--wandb_path", "${input:wandb_path}",
+        // "--device", "cuda:1",
+        "--logger", "wandb",
+        "--log_project_name", "WBT",
+        "--run_name", "wbt-${input:output_name}"
+      ],
+      "options": { "cwd": "${workspaceFolder}/scripts", "env": { "CUDA_VISIBLE_DEVICES": "1" } },
       "problemMatcher": []
     },
     {
