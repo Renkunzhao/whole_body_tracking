@@ -49,6 +49,8 @@ ID & Scene & Notes \\
 \texttt{Go2-Rebounce-Trampoline-history} & deformable trampoline & flattened actor history, $H=5$ \\
 \texttt{Go2-Rebounce-Trampoline-RNN} & deformable trampoline & recurrent actor, no flattened history \\
 \texttt{Go2-Rebounce-Trampoline-Teacher} & deformable trampoline & privileged actor upper bound \\
+\texttt{Go2-Rebounce-Trampoline-Student} & deformable trampoline & MLP student distilled from privileged teacher \\
+\texttt{Go2-Rebounce-Trampoline-RNN-Student} & deformable trampoline & recurrent student distilled from privileged teacher \\
 \hline
 \end{tabular}
 \end{center}
@@ -771,6 +773,9 @@ longer temporal context & test recurrent online adaptation \\
 Teacher with true trampoline parameters & append true $E$, $m$, $\nu$,
 $\mu_d$, and damping to the actor observation & privileged upper bound and RMA
 teacher \\
+Teacher-student distillation & train a deployable student to imitate the
+privileged teacher's action using RSL-RL \texttt{StudentTeacher} distillation &
+standalone method between plain history/RNN and full RMA \\
 RMA / latent estimator & train with privileged dynamics information, then learn
 a deployable latent estimator from history & final sim-to-real adaptation story
 \\
@@ -792,6 +797,83 @@ compromise. This creates the justification for the later methods: history,
 recurrence, or an RMA-style latent estimator should recover stiffness-dependent
 behavior while keeping the deployable actor free of privileged trampoline
 parameters.
+
+\paragraph{Teacher-student distillation.}
+The first student method uses the built-in RSL-RL
+\texttt{DistillationRunner}. A trained privileged teacher policy is loaded from
+a PPO checkpoint. The teacher observation group matches
+\texttt{Go2-Rebounce-Trampoline-Teacher}: deployable terms plus root position,
+base linear velocity, and normalized true trampoline parameters. The student
+observation group remains deployable. In the MLP student variant,
+\texttt{Go2-Rebounce-Trampoline-Student}, the student receives the same
+flattened $H=5$ actor history as the history baseline. In
+\texttt{Go2-Rebounce-Trampoline-RNN-Student}, the student receives the
+instantaneous deployable observation and carries temporal information in an
+LSTM hidden state.
+
+The RSL-RL configuration uses
+\[
+    \texttt{obs\_groups}
+    =
+    \{\texttt{"policy"}:[\texttt{"policy"}],
+      \texttt{"teacher"}:[\texttt{"teacher"}]\}.
+\]
+The keys on the left are the observation sets consumed by the RSL-RL
+distillation algorithm. The lists on the right are the IsaacLab observation
+groups exposed by the environment and concatenated for each set. Thus the
+student network receives only the environment's \texttt{policy} group, while
+the teacher network receives only the environment's \texttt{teacher} group.
+This is analogous to PPO's usual asymmetric mapping
+\texttt{\{"policy": ["policy"], "critic": ["critic"]\}}, except that
+distillation has no critic and instead uses a privileged teacher action target.
+
+In IsaacLab/RSL-RL distillation, the teacher action is computed without
+gradient from the privileged observation,
+\begin{equation}
+    \bm{a}^{T}_t
+    =
+    \pi_T(\bm{o}^{T}_t),
+    \qquad
+    \bm{o}^{T}_t
+    =
+    \mathrm{concat}\bigl(
+        \texttt{obs}[\texttt{"teacher"}]
+    \bigr),
+\end{equation}
+and the student action used in the loss is the deterministic student output,
+\begin{equation}
+    \bm{a}^{S}_t
+    =
+    \mu_S(\bm{o}^{S}_t),
+    \qquad
+    \bm{o}^{S}_t
+    =
+    \mathrm{concat}\bigl(
+        \texttt{obs}[\texttt{"policy"}]
+    \bigr).
+\end{equation}
+For the recurrent student, $\mu_S$ also depends on its hidden state, which is
+updated from the deployable observation history. The per-update behavior loss
+is
+\begin{equation}
+    \mathcal{L}_{\mathrm{distill}}
+    =
+    \frac{1}{|\mathcal{B}|}
+    \sum_{t\in\mathcal{B}}
+    \left\|
+        \mu_S(\bm{o}^{S}_t)
+        -
+        \pi_T(\bm{o}^{T}_t)
+    \right\|_2^2,
+\end{equation}
+or the same expression with a Huber loss if \texttt{loss\_type=huber}. The
+teacher checkpoint is loaded into the teacher network, and only the student
+parameters are optimized during distillation.
+This is not yet full RMA: the student is not explicitly supervised to match a
+privileged latent dynamics code. It is nevertheless a separate method because
+it tests whether privileged teacher behavior can be compressed into a
+deployable history/RNN policy before introducing a custom latent adaptation
+module.
 
 \paragraph{Preliminary fixed-condition result.}
 A first evaluation sweep compared two policies: a stiffness-randomized policy
@@ -1138,15 +1220,20 @@ The next method-development sequence is:
     uses a one-layer LSTM with hidden size $256$. This tests whether learned
     memory improves online adaptation without inflating the actor input
     dimension.
+    \item \textbf{Teacher-student distillation}: train a privileged teacher
+    with true trampoline parameters, then distill its actions into either a
+    deployable history-MLP student or a deployable RNN student. This is now a
+    standalone method using RSL-RL's built-in
+    \texttt{DistillationRunner}/\texttt{StudentTeacher} implementation.
     \item \textbf{RMA}: train a teacher or privileged module with trampoline
     dynamics information, then train a deployable adaptation module that
     infers a latent dynamics code from history. This is the final paper-facing
     adaptation story if MLP+history or RNN expose a clear benefit.
 \end{enumerate}
-All three methods should use the same deployable observation set for a fair
-comparison. The privileged trampoline parameters may be used for critic,
-teacher, or latent-supervision losses, but not as direct actor inputs at test
-time.
+All deployable methods should use the same deployable observation set for a
+fair comparison. The privileged trampoline parameters may be used for critic,
+teacher, distillation targets, or latent-supervision losses, but not as direct
+actor inputs at test time.
 
 To make different trampoline dynamics visible in evaluation, run fixed
 evaluation sweeps over several discrete trampoline settings instead of relying

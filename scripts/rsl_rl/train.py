@@ -50,6 +50,7 @@ import os
 import pathlib
 import torch
 from datetime import datetime
+from rsl_rl.runners import DistillationRunner
 
 from isaaclab.envs import (
     DirectMARLEnv,
@@ -230,12 +231,17 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     env = RslRlVecEnvWrapper(env, clip_actions=agent_cfg.clip_actions)
 
     # create runner from rsl-rl
-    if requires_motion:
+    runner_class_name = getattr(agent_cfg, "class_name", "OnPolicyRunner")
+    if runner_class_name == "DistillationRunner":
+        runner = DistillationRunner(env, agent_cfg.to_dict(), log_dir=log_dir, device=agent_cfg.device)
+    elif requires_motion:
         runner = MotionOnPolicyRunner(
             env, agent_cfg.to_dict(), log_dir=log_dir, device=agent_cfg.device, registry_name=registry_name
         )
-    else:
+    elif runner_class_name == "OnPolicyRunner":
         runner = MyOnPolicyRunner(env, agent_cfg.to_dict(), log_dir=log_dir, device=agent_cfg.device)
+    else:
+        raise ValueError(f"Unsupported RSL-RL runner class: {runner_class_name}")
 
     # write git state to logs
     runner.add_git_repo_to_log(__file__)
@@ -243,6 +249,8 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     if resume_path is None and agent_cfg.resume:
         resume_path = get_checkpoint_path(log_root_path, agent_cfg.load_run, agent_cfg.load_checkpoint)
         print(f"[INFO]: Loading model checkpoint from: {resume_path}")
+    if resume_path is None and runner_class_name == "DistillationRunner":
+        raise ValueError("Distillation training requires a teacher checkpoint. Pass it with --wandb_path or --resume.")
     if resume_path is not None:
         runner.load(resume_path)
 

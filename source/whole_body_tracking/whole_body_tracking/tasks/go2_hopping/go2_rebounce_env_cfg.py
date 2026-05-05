@@ -276,6 +276,46 @@ class RecurrentTeacherObservationsCfg(RecurrentObservationsCfg):
 
 
 @configclass
+class DistillationObservationsCfg:
+    """Student-teacher observations for action distillation.
+
+    The student receives the same deployable actor history used by the
+    flattened-history baseline. The teacher group must match the privileged
+    teacher PPO actor observation exactly so its checkpoint can be loaded into
+    RSL-RL's StudentTeacher module.
+    """
+
+    @configclass
+    class PolicyCfg(ObservationsCfg.PolicyCfg):
+        def __post_init__(self):
+            super().__post_init__()
+            self.history_length = REBOUNCE_OBS_HISTORY_LENGTH
+
+    @configclass
+    class TeacherCfg(TeacherObservationsCfg.PolicyCfg):
+        pass
+
+    policy: PolicyCfg = PolicyCfg()
+    teacher: TeacherCfg = TeacherCfg()
+
+
+@configclass
+class RecurrentDistillationObservationsCfg:
+    """Student-teacher observations for recurrent student distillation."""
+
+    @configclass
+    class PolicyCfg(RecurrentObservationsCfg.PolicyCfg):
+        pass
+
+    @configclass
+    class TeacherCfg(TeacherObservationsCfg.PolicyCfg):
+        pass
+
+    policy: PolicyCfg = PolicyCfg()
+    teacher: TeacherCfg = TeacherCfg()
+
+
+@configclass
 class EventCfg:
     """Configuration for events."""
 
@@ -546,6 +586,13 @@ class Go2RebounceTrampolineTeacherEnvCfg(Go2RebounceTrampolineEnvCfg):
 
 
 @configclass
+class Go2RebounceTrampolineStudentEnvCfg(Go2RebounceTrampolineEnvCfg):
+    """Distilled MLP student with deployable actor history and privileged teacher observations."""
+
+    observations: DistillationObservationsCfg = DistillationObservationsCfg()
+
+
+@configclass
 class Go2RebounceTrampolineRnnEnvCfg(Go2RebounceTrampolineEnvCfg):
     """Trampoline rebounce with recurrent policy observations."""
 
@@ -557,3 +604,10 @@ class Go2RebounceTrampolineRnnTeacherEnvCfg(Go2RebounceTrampolineEnvCfg):
     """Recurrent trampoline rebounce teacher with true trampoline parameters."""
 
     observations: RecurrentTeacherObservationsCfg = RecurrentTeacherObservationsCfg()
+
+
+@configclass
+class Go2RebounceTrampolineRnnStudentEnvCfg(Go2RebounceTrampolineEnvCfg):
+    """Distilled recurrent student with deployable observations and privileged teacher observations."""
+
+    observations: RecurrentDistillationObservationsCfg = RecurrentDistillationObservationsCfg()

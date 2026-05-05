@@ -47,8 +47,10 @@
         "Go2-Rebounce-Trampoline",
         "Go2-Rebounce-Trampoline-history",
         "Go2-Rebounce-Trampoline-Teacher",
+        "Go2-Rebounce-Trampoline-Student",
         "Go2-Rebounce-Trampoline-RNN",
         "Go2-Rebounce-Trampoline-RNN-Teacher",
+        "Go2-Rebounce-Trampoline-RNN-Student",
         "Tracking-Flat-Go2-Jump-Wo-State-Estimation-v0",
         "Tracking-Trampoline-Go2-Jump-Wo-State-Estimation-v0"
       ]
@@ -194,6 +196,25 @@
         // "--video_interval", "${input:video_interval}",
         // "--registry_name", "${input:ion}",
         // "--wandb_path", "${input:wandb_path}",
+        "--logger", "wandb",
+        "--log_project_name", "WBT",
+        "--run_name", "wbt-${input:output_name}"
+      ],
+      "options": { "cwd": "${workspaceFolder}/scripts" },
+      "problemMatcher": []
+    },
+    {
+      "label": "Train (Distill)",
+      "type": "shell",
+      "command": "conda",
+      "args": [
+        "run",
+        "--no-capture-output",
+        "-n", "isaaclab",
+        "python", "rsl_rl/train.py",
+        "--task", "${input:Task}",
+        "--headless",
+        "--wandb_path", "${input:wandb_path}",
         "--logger", "wandb", 
         "--log_project_name", "WBT", 
         "--run_name", "wbt-${input:output_name}"

@@ -36,7 +36,7 @@ simulation_app = app_launcher.app
 import gymnasium as gym
 import torch
 
-from rsl_rl.runners import OnPolicyRunner
+from rsl_rl.runners import DistillationRunner, OnPolicyRunner
 
 from isaaclab.envs import (
     DirectMARLEnv,
@@ -316,7 +316,13 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     env = RslRlVecEnvWrapper(env, clip_actions=agent_cfg.clip_actions)
 
     # load previously trained model
-    ppo_runner = OnPolicyRunner(env, agent_cfg.to_dict(), log_dir=None, device=agent_cfg.device)
+    runner_class_name = getattr(agent_cfg, "class_name", "OnPolicyRunner")
+    if runner_class_name == "DistillationRunner":
+        ppo_runner = DistillationRunner(env, agent_cfg.to_dict(), log_dir=None, device=agent_cfg.device)
+    elif runner_class_name == "OnPolicyRunner":
+        ppo_runner = OnPolicyRunner(env, agent_cfg.to_dict(), log_dir=None, device=agent_cfg.device)
+    else:
+        raise ValueError(f"Unsupported RSL-RL runner class: {runner_class_name}")
     ppo_runner.load(resume_path)
 
     # obtain the trained policy for inference
