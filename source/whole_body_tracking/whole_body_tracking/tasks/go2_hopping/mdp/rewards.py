@@ -186,12 +186,6 @@ class rebounce_height_tracking_exp(ManagerTermBase):
         return cmd.is_apex.float() * torch.exp(-torch.square(height_error / std)) * orientation_reward
 
 
-def valid_apex_bonus(env: ManagerBasedRLEnv, command_name: str) -> torch.Tensor:
-    """One-step bootstrap reward at each command-detected valid apex."""
-    cmd = env.command_manager.get_term(command_name)
-    return cmd.is_apex.float()
-
-
 def joint_mechanical_energy_penalty(
     env: ManagerBasedRLEnv,
     command_name: str,

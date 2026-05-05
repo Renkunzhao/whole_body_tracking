@@ -51,7 +51,8 @@ VELOCITY_RANGE = {
 }
 REBOUNCE_HEIGHT_RANGE = (0.5, 1.2)
 REBOUNCE_OBS_HISTORY_LENGTH = 5
-HOPPING_INIT_STEP = 00 * 24
+# Fix the trampoline at the beginning so the policy learns to hop before adapting to trampoline dynamics.
+TRAMPOLINE_DR_STEP = 300 * 64
 TRAMPOLINE_DR_YOUNGS_MODULUS_RANGE = (2.0e4, 8.0e4)
 TRAMPOLINE_DR_MASS_RANGE = (5.0, 15.0)
 TRAMPOLINE_DR_DYNAMIC_FRICTION_RANGE = (0.4, 1.2)
@@ -64,7 +65,8 @@ TRAMPOLINE_FIXED_DYNAMIC_FRICTION_RANGE = (0.8, 0.8)
 TRAMPOLINE_FIXED_ELASTICITY_DAMPING_RANGE = (0.02, 0.02)
 TRAMPOLINE_FIXED_DAMPING_SCALE_RANGE = (1.0, 1.0)
 TRAMPOLINE_FIXED_POISSONS_RATIO_RANGE = (0.35, 0.35)
-
+# Delay energy optimization until after robust hopping and trampoline adaptation are learned.
+ENERGY_PENALTY_START_STEP = 5000 * 64
 
 GO2_HOPPING_CFG = get_go2_cfg(
     spawn=get_go2_spawn_cfg(
@@ -366,11 +368,6 @@ class RewardsCfg:
             "orientation_std": 0.35,
         },
     )
-    valid_apex_bonus = RewTerm(
-        func=mdp.valid_apex_bonus,
-        weight=50.0,
-        params={"command_name": "hop"},
-    )
     energy_penalty = RewTerm(
         # func=mdp.joint_mechanical_energy_penalty,
         # weight=-2.5e-2,
@@ -434,26 +431,17 @@ class TerminationsCfg:
 class CurriculumCfg:
     """Curriculum terms for the MDP.
 
-    A large valid-apex bonus bootstraps the discovery of rebounding and is then
-    removed. The energy penalty is delayed until the policy first learns
-    sustained rebounding. ``modify_reward_weight`` uses manager steps, so 1000
-    PPO iterations correspond to 1000 * num_steps_per_env = 24000 manager steps.
+    Trampoline randomization starts after the fixed-trampoline warmup, and the
+    energy penalty starts later once robust rebounding has been learned.
+    ``modify_reward_weight`` uses manager steps.
     """
 
-    disable_valid_apex_bonus = CurrTerm(
-        func=modify_reward_weight,
-        params={
-            "term_name": "valid_apex_bonus",
-            "weight": 0.0,
-            "num_steps": HOPPING_INIT_STEP,
-        },
-    )
     enable_energy_penalty = CurrTerm(
         func=modify_reward_weight,
         params={
             "term_name": "energy_penalty",
             "weight": -1.5e-2,
-            "num_steps": HOPPING_INIT_STEP,
+            "num_steps": ENERGY_PENALTY_START_STEP,
         },
     )
 
@@ -550,7 +538,7 @@ class TrampolineEventCfg(EventCfg):
             "elasticity_damping_range": TRAMPOLINE_DR_ELASTICITY_DAMPING_RANGE,
             "damping_scale_range": TRAMPOLINE_DR_DAMPING_SCALE_RANGE,
             "poissons_ratio_range": TRAMPOLINE_DR_POISSONS_RATIO_RANGE,
-            "randomization_start_step": HOPPING_INIT_STEP,
+            "randomization_start_step": TRAMPOLINE_DR_STEP,
             "fixed_youngs_modulus_range": TRAMPOLINE_FIXED_YOUNGS_MODULUS_RANGE,
             "fixed_mass_range": TRAMPOLINE_FIXED_MASS_RANGE,
             "fixed_dynamic_friction_range": TRAMPOLINE_FIXED_DYNAMIC_FRICTION_RANGE,
