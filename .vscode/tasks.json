@@ -45,6 +45,7 @@
         "Go2-Hopping-Trampoline",
         "Go2-Rebounce-Flat",
         "Go2-Rebounce-Trampoline",
+        "Go2-Rebounce-Trampoline-history",
         "Go2-Rebounce-Trampoline-Teacher",
         "Go2-Rebounce-Trampoline-Student",
         "Go2-Rebounce-Trampoline-RNN",
@@ -71,6 +72,18 @@
       "type": "promptString",
       "description": "Type wandb run path",
       "default": ""
+    },
+    {
+      "id": "teacher_load_run",
+      "type": "promptString",
+      "description": "Type local teacher run folder",
+      "default": ""
+    },
+    {
+      "id": "teacher_checkpoint",
+      "type": "promptString",
+      "description": "Type local teacher checkpoint",
+      "default": "model_.*.pt"
     },
     {
       "id": "mode",
@@ -224,6 +237,27 @@
         "--run_name", "wbt-${input:output_name}"
       ],
       "options": { "cwd": "${workspaceFolder}/scripts", "env": { "CUDA_VISIBLE_DEVICES": "1" } },
+      "problemMatcher": []
+    },
+    { 
+      "label": "Train Distill Local Teacher (GPU 0)",
+      "type": "shell",
+      "command": "conda",
+      "args": [
+        "run",
+        "--no-capture-output",
+        "-n", "isaaclab",
+        "python", "rsl_rl/train.py",
+        "--task", "${input:Task}",
+        "--headless",
+        "--resume", "True",
+        "--load_run", "${input:teacher_load_run}",
+        "--checkpoint", "${input:teacher_checkpoint}",
+        "--logger", "wandb",
+        "--log_project_name", "WBT",
+        "--run_name", "wbt-${input:output_name}"
+      ],
+      "options": { "cwd": "${workspaceFolder}/scripts", "env": { "CUDA_VISIBLE_DEVICES": "0" } },
       "problemMatcher": []
     },
     {

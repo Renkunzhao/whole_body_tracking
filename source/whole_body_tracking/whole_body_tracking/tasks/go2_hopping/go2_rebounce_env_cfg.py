@@ -50,9 +50,9 @@ VELOCITY_RANGE = {
     "yaw": (-0.78, 0.78),
 }
 REBOUNCE_HEIGHT_RANGE = (0.5, 1.2)
-REBOUNCE_OBS_HISTORY_LENGTH = 5
+REBOUNCE_OBS_HISTORY_LENGTH = 10
 # Fix the trampoline at the beginning so the policy learns to hop before adapting to trampoline dynamics.
-TRAMPOLINE_DR_STEP = 300 * 64
+TRAMPOLINE_DR_STEP = 1000 * 24
 TRAMPOLINE_DR_YOUNGS_MODULUS_RANGE = (2.0e4, 8.0e4)
 TRAMPOLINE_DR_MASS_RANGE = (5.0, 15.0)
 TRAMPOLINE_DR_DYNAMIC_FRICTION_RANGE = (0.4, 1.2)
@@ -66,7 +66,7 @@ TRAMPOLINE_FIXED_ELASTICITY_DAMPING_RANGE = (0.02, 0.02)
 TRAMPOLINE_FIXED_DAMPING_SCALE_RANGE = (1.0, 1.0)
 TRAMPOLINE_FIXED_POISSONS_RATIO_RANGE = (0.35, 0.35)
 # Delay energy optimization until after robust hopping and trampoline adaptation are learned.
-ENERGY_PENALTY_START_STEP = 5000 * 64
+ENERGY_PENALTY_START_STEP = 5000 * 24
 
 GO2_HOPPING_CFG = get_go2_cfg(
     spawn=get_go2_spawn_cfg(
