@@ -56,7 +56,7 @@ class Go2HoppingRecurrentPPORunnerCfg(Go2HoppingPPORunnerCfg):
 
 @configclass
 class Go2HoppingDistillationRunnerCfg(RslRlDistillationRunnerCfg):
-    num_steps_per_env = 64
+    num_steps_per_env = 24
     max_iterations = 30000
     save_interval = 100
     experiment_name = "go2_hopping"
@@ -73,7 +73,7 @@ class Go2HoppingDistillationRunnerCfg(RslRlDistillationRunnerCfg):
     algorithm = RslRlDistillationAlgorithmCfg(
         num_learning_epochs=5,
         learning_rate=1.0e-3,
-        gradient_length=16,
+        gradient_length=12,
         max_grad_norm=1.0,
         loss_type="mse",
         optimizer="adam",
