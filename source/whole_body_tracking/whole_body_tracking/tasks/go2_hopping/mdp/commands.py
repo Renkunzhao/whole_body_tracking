@@ -17,6 +17,24 @@ if TYPE_CHECKING:
 _G = 9.81
 
 
+def set_rebounce_command_height_range(
+    env: ManagerBasedRLEnv,
+    env_ids: Sequence[int],
+    command_name: str,
+    init_peak_height_range: tuple[float, float],
+    peak_height_range: tuple[float, float],
+    num_steps: int,
+) -> tuple[float, float]:
+    """Keep the rebounce target simple during the hopping-init phase."""
+    del env_ids
+    command = env.command_manager.get_term(command_name)
+    if env.common_step_counter <= num_steps:
+        command.cfg.ranges.peak_height = init_peak_height_range
+    else:
+        command.cfg.ranges.peak_height = peak_height_range
+    return command.cfg.ranges.peak_height
+
+
 class UniformHoppingCommand(CommandTerm):
     """Per-env (peak_height, stance_time) command, uniformly sampled within user ranges.
 

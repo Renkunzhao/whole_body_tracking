@@ -42,7 +42,7 @@ class Go2HoppingPPORunnerCfg(RslRlOnPolicyRunnerCfg):
 
 @configclass
 class Go2HoppingRecurrentPPORunnerCfg(Go2HoppingPPORunnerCfg):
-    num_steps_per_env = 64
+    num_steps_per_env = 24
     policy = RslRlPpoActorCriticRecurrentCfg(
         init_noise_std=1.0,
         actor_hidden_dims=[512, 256, 128],

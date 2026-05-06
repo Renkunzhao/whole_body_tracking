@@ -49,24 +49,27 @@ VELOCITY_RANGE = {
     "pitch": (-0.52, 0.52),
     "yaw": (-0.78, 0.78),
 }
-REBOUNCE_HEIGHT_RANGE = (0.5, 1.2)
 REBOUNCE_OBS_HISTORY_LENGTH = 10
-# Fix the trampoline at the beginning so the policy learns to hop before adapting to trampoline dynamics.
-TRAMPOLINE_DR_STEP = 1000 * 24
-TRAMPOLINE_DR_YOUNGS_MODULUS_RANGE = (2.0e4, 8.0e4)
-TRAMPOLINE_DR_MASS_RANGE = (5.0, 15.0)
-TRAMPOLINE_DR_DYNAMIC_FRICTION_RANGE = (0.4, 1.2)
-TRAMPOLINE_DR_ELASTICITY_DAMPING_RANGE = (0.01, 0.1)
-TRAMPOLINE_DR_DAMPING_SCALE_RANGE = (1.0, 1.0)
-TRAMPOLINE_DR_POISSONS_RATIO_RANGE = (0.25, 0.45)
+# Early phase: make hopping discovery easy before restoring the full command and trampoline DR ranges.
+HOPPING_INIT_STEP = 1000 * 24
+HOPPING_INIT_HEIGHT_RANGE = (0.5, 0.5)
 TRAMPOLINE_FIXED_YOUNGS_MODULUS_RANGE = (8.0e4, 8.0e4)
 TRAMPOLINE_FIXED_MASS_RANGE = (10.0, 10.0)
 TRAMPOLINE_FIXED_DYNAMIC_FRICTION_RANGE = (0.8, 0.8)
 TRAMPOLINE_FIXED_ELASTICITY_DAMPING_RANGE = (0.02, 0.02)
 TRAMPOLINE_FIXED_DAMPING_SCALE_RANGE = (1.0, 1.0)
 TRAMPOLINE_FIXED_POISSONS_RATIO_RANGE = (0.35, 0.35)
+REBOUNCE_HEIGHT_RANGE = (0.5, 1.2)
+TRAMPOLINE_DR_YOUNGS_MODULUS_RANGE = (2.0e4, 8.0e4)
+TRAMPOLINE_DR_MASS_RANGE = (5.0, 15.0)
+TRAMPOLINE_DR_DYNAMIC_FRICTION_RANGE = (0.4, 1.2)
+TRAMPOLINE_DR_ELASTICITY_DAMPING_RANGE = (0.01, 0.1)
+TRAMPOLINE_DR_DAMPING_SCALE_RANGE = (1.0, 1.0)
+TRAMPOLINE_DR_POISSONS_RATIO_RANGE = (0.25, 0.45)
+
 # Delay energy optimization until after robust hopping and trampoline adaptation are learned.
 ENERGY_PENALTY_START_STEP = 5000 * 24
+
 
 GO2_HOPPING_CFG = get_go2_cfg(
     spawn=get_go2_spawn_cfg(
@@ -431,11 +434,21 @@ class TerminationsCfg:
 class CurriculumCfg:
     """Curriculum terms for the MDP.
 
-    Trampoline randomization starts after the fixed-trampoline warmup, and the
+    The rebounce command starts at a fixed low target while the policy discovers
+    hopping. Trampoline randomization starts after the same init phase, and the
     energy penalty starts later once robust rebounding has been learned.
     ``modify_reward_weight`` uses manager steps.
     """
 
+    hopping_init_height = CurrTerm(
+        func=mdp.set_rebounce_command_height_range,
+        params={
+            "command_name": "hop",
+            "init_peak_height_range": HOPPING_INIT_HEIGHT_RANGE,
+            "peak_height_range": REBOUNCE_HEIGHT_RANGE,
+            "num_steps": HOPPING_INIT_STEP,
+        },
+    )
     enable_energy_penalty = CurrTerm(
         func=modify_reward_weight,
         params={
@@ -538,7 +551,7 @@ class TrampolineEventCfg(EventCfg):
             "elasticity_damping_range": TRAMPOLINE_DR_ELASTICITY_DAMPING_RANGE,
             "damping_scale_range": TRAMPOLINE_DR_DAMPING_SCALE_RANGE,
             "poissons_ratio_range": TRAMPOLINE_DR_POISSONS_RATIO_RANGE,
-            "randomization_start_step": TRAMPOLINE_DR_STEP,
+            "randomization_start_step": HOPPING_INIT_STEP,
             "fixed_youngs_modulus_range": TRAMPOLINE_FIXED_YOUNGS_MODULUS_RANGE,
             "fixed_mass_range": TRAMPOLINE_FIXED_MASS_RANGE,
             "fixed_dynamic_friction_range": TRAMPOLINE_FIXED_DYNAMIC_FRICTION_RANGE,
