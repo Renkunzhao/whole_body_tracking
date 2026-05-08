@@ -163,3 +163,8 @@ Below is an overview of the code structure for this repository:
   Includes utility scripts for preprocessing motion data, training policies, and evaluating trained policies.
 
 This structure is designed to ensure modularity and ease of navigation for developers expanding the project.
+
+```bash
+sudo setfacl -m u:kren:rwx /tmp/isaaclab/logs
+sudo setfacl -d -m u:kren:rwx /tmp/isaaclab/logs
+```
