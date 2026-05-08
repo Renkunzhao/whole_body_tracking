@@ -4,7 +4,7 @@
 \geometry{margin=2.5cm}
 \setlength{\emergencystretch}{2em}
 
-\title{Go2 Continuous Rebounce Setup and Experiment Plan}
+\title{Go2 Hopping Setup and Experiment Plan}
 \date{}
 
 \begin{document}
@@ -12,29 +12,25 @@
 
 \section{Current Task}
 
-The current task is continuous rebounce control for Go2. At reset, each
-environment samples a scalar target apex-height command
+The current task is hopping control for Go2. At reset, each
+environment samples a scalar target apex-height command. The full command
+range is
 \begin{equation}
     h^{*} \sim \mathcal{U}(0.5, 1.2)\ \mathrm{m},
 \end{equation}
-and independently samples the initial drop height
+but during the initial hopping-discovery curriculum it is fixed to
+$h^*=0.5$ m. The initial drop height is sampled independently throughout
+training:
 \begin{equation}
     h_{\mathrm{drop}} \sim \mathcal{U}(0.5, 1.2)\ \mathrm{m}.
 \end{equation}
 The robot base is placed at $h_{\mathrm{drop}}$ with zero root velocity and the
-default joint state. The policy must keep rebounding for the full episode. The
+default joint state. The policy must keep hopping for the full episode. The
 objective is not to jump higher forever, nor merely to recover to the initial
 release height, but to make each rebound apex return close to the commanded
 target height while maintaining a flat quadruped posture and staying in place.
 
-Unlike the earlier single-rebounce setup, reaching an apex is no longer a
-termination condition. The episode continues until either a failure condition is
-met or the $20$ s time limit is reached. A successful rollout should therefore
-show repeated cycles of
-\begin{center}
-    fall,\quad support interaction,\quad rebound,\quad valid apex,\quad
-    re-arm after the feet return near the support.
-\end{center}
+The episode continues until either a failure condition is met or the $20$ s time limit is reached.
 
 \section{Environment Variants}
 
@@ -42,15 +38,15 @@ The main environment IDs are:
 \begin{center}
 \begin{tabular}{lll}
 \hline
-ID & Scene & Notes \\
+ID & Notes \\
 \hline
-\texttt{Go2-Rebounce-Flat} & rigid plane & 4096 envs, env spacing $2.5$ m \\
-\texttt{Go2-Rebounce-Trampoline} & deformable trampoline & instantaneous deployable actor \\
-\texttt{Go2-Rebounce-Trampoline-history} & deformable trampoline & flattened actor history, $H=5$ \\
-\texttt{Go2-Rebounce-Trampoline-RNN} & deformable trampoline & recurrent actor, no flattened history \\
-\texttt{Go2-Rebounce-Trampoline-Teacher} & deformable trampoline & privileged actor upper bound \\
-\texttt{Go2-Rebounce-Trampoline-Student} & deformable trampoline & MLP student distilled from privileged teacher \\
-\texttt{Go2-Rebounce-Trampoline-RNN-Student} & deformable trampoline & recurrent student distilled from privileged teacher \\
+\texttt{Go2-Rebounce-Flat} & rigid plane, 4096 envs, env spacing $2.5$ m \\
+\texttt{Go2-Rebounce-Trampoline} & instantaneous deployable actor \\
+\texttt{Go2-Rebounce-Trampoline-history} & flattened actor history, $H=10$ \\
+\texttt{Go2-Rebounce-Trampoline-RNN} & recurrent actor, no flattened history \\
+\texttt{Go2-Rebounce-Trampoline-Teacher} & privileged actor upper bound \\
+\texttt{Go2-Rebounce-Trampoline-Student} & MLP student distilled from privileged teacher \\
+\texttt{Go2-Rebounce-Trampoline-RNN-Student} & recurrent student distilled from privileged teacher \\
 \hline
 \end{tabular}
 \end{center}
@@ -85,9 +81,14 @@ The rebounce command is
     \bm{c} = [h^{*}].
 \end{equation}
 In the current setup, the target rebound-apex height and the initial drop height
-are sampled independently from the same range:
+are independent. During the first $1000$ PPO iterations the target is fixed to
+$0.5$ m; after that it uses the full range:
 \begin{equation}
-    h^{*} \sim \mathcal{U}(0.5,1.2),
+    h^{*} =
+    \begin{cases}
+        0.5, & N \le 1000\times24, \\
+        \mathcal{U}(0.5,1.2), & N > 1000\times24,
+    \end{cases}
     \qquad
     h_{\mathrm{drop}} \sim \mathcal{U}(0.5,1.2).
 \end{equation}
@@ -128,127 +129,128 @@ $b^{\mathrm{apex}}$ & \texttt{is\_apex} & one-step valid-apex flag \\
 \end{tabular}
 \end{center}
 
+
 \section{Observations and Actions}
 
-Two actor-observation variants are kept for comparison.
+The observation design is split into three reusable blocks: deployable robot
+observations, privileged base-state observations, and privileged trampoline
+observations. Different methods combine these blocks differently, but the final
+deployable actor should use only the deployable block.
 
-\paragraph{Full-state simulation observation.}
-The original full-state actor observation is
+\paragraph{Deployable observations.}
+The deployable actor observation is
 \begin{equation}
-    \bm{o}^{\pi,\mathrm{full}}_t =
+    \bm{o}^{\mathrm{dep}}_t =
     \left[
-        h^{*},\,
-        \bm{p}^{w}_t,\,
-        \bm{q}^{w}_t,\,
-        \bm{v}^{b}_t,\,
-        \bm{\omega}^{b}_t,\,
-        \tilde{\bm{q}}_t,\,
-        \tilde{\dot{\bm{q}}}_t,\,
+        h^{*}_t,
+        \bm{g}^{b}_t,
+        \bm{\omega}^{b}_t,
+        \tilde{\bm{q}}_t,
+        \tilde{\dot{\bm{q}}}_t,
         \bm{a}_{t-1}
     \right].
 \end{equation}
-Here $\bm{p}^{w}_t$ is the world root position, $\bm{q}^{w}_t$ is the unique
-world root quaternion, $\bm{v}^{b}_t$ is base linear velocity, and
-$\bm{\omega}^{b}_t$ is base angular velocity. This variant is useful for
-simulation-only baselines and for quantifying how much full-state information
-helps MLP+DR.
+Here $h^{*}_t$ is the commanded target apex height, $\bm{g}^{b}_t$ is projected
+gravity in the base frame, $\bm{\omega}^{b}_t$ is base angular velocity,
+$\tilde{\bm{q}}_t$ and $\tilde{\dot{\bm{q}}}_t$ are relative joint position and
+joint velocity, and $\bm{a}_{t-1}$ is the previous action. This block is meant
+to be hardware-realistic: it does not include world root position, world root
+orientation, base linear velocity, or true trampoline parameters.
 
-\paragraph{Hardware-realistic deployable observation.}
-The current deployable actor observation removes world root position, world
-root quaternion, and base linear velocity:
+During training, additive noise is applied to projected gravity, base angular
+velocity, joint position, and joint velocity in the actor observation. The
+current noise ranges are set in \texttt{go2\_rebounce\_env\_cfg.py} and should
+be updated after real-robot measurement.
+
+\paragraph{Base privileged observations.}
+The base privileged block is
 \begin{equation}
-    \bm{o}^{\pi,\mathrm{deploy}}_t =
+    \bm{o}^{\mathrm{base}}_t =
     \left[
-        h^{*},\,
-        \bm{g}^{b}_t,\,
-        \bm{\omega}^{b}_t,\,
-        \tilde{\bm{q}}_t,\,
-        \tilde{\dot{\bm{q}}}_t,\,
-        \bm{a}_{t-1}
+        \bm{p}^{w}_t,
+        \bm{q}^{w}_t,
+        \bm{v}^{b}_t
     \right],
 \end{equation}
-where $\bm{g}^{b}_t$ is the projected gravity vector in the base frame. This
-observation is closer to what can be deployed without mocap: joint position,
-joint velocity, IMU-like projected gravity, IMU angular velocity, previous
-action, and the commanded target apex height. It intentionally does not expose
-absolute base height or vertical velocity to the actor.
+where $\bm{p}^{w}_t$ is root position in the world frame, $\bm{q}^{w}_t$ is the
+unique world root quaternion, and $\bm{v}^{b}_t$ is base linear velocity. This
+block is available to the asymmetric critic and privileged teacher variants,
+but not to deployable actors.
 
-The deployable actor observation uses additive noise on projected gravity,
-base angular velocity, joint position, and joint velocity. The critic is
-asymmetric and keeps privileged full-state terms without corruption:
-\[
-    \bm{p}^{w}_t,\qquad
-    \bm{q}^{w}_t,\qquad
-    \bm{v}^{b}_t.
-\]
-Thus the critic can use full simulator state during training, while the actor
-remains deployable. The policy action is a 12-DoF joint-position target action
-with the default Go2 joint offset. In the trampoline variant, a separate action
-term keeps the trampoline rim pinned.
-
-\paragraph{Privileged teacher observation.}
-For teacher-policy and RMA-style experiments, a privileged actor observation
-variant uses instantaneous simulator state and dynamics parameters. In addition
-to the deployable actor terms, the teacher actor receives root position, base
-linear velocity, and the true randomized trampoline parameters:
-\[
-    \bm{o}^{\mathrm{tramp}} =
+\paragraph{Trampoline privileged observations.}
+The trampoline privileged block is the normalized true trampoline-parameter
+vector
+\begin{equation}
+    \bm{o}^{\mathrm{tramp}}_t =
     \left[
-        \log(E/E_0),\,
-        (m-m_0)/s_m,\,
-        (\nu-\nu_0)/s_\nu,\,
-        (\mu_d-\mu_0)/s_\mu,\,
+        \log(E/E_0),
+        (m-m_0)/s_m,
+        (\nu-\nu_0)/s_\nu,
+        (\mu_d-\mu_0)/s_\mu,
         \log(d_e/d_{e,0})
     \right].
-\]
-The teacher observation uses no actor history ($H=0$) and no observation
-corruption. These terms are used only by teacher tasks and are not part of the
-deployable actor observation. Their purpose is to test the upper-bound
-performance of a policy that knows the robot root state and trampoline
-dynamics, and to provide a target for later latent dynamics estimation.
+\end{equation}
+It contains Young's modulus $E$, trampoline mass $m$, Poisson ratio $\nu$,
+dynamic friction $\mu_d$, and elasticity damping $d_e$. This block is used only
+for privileged teachers, teacher critics, and future latent-adaptation training
+signals. It should not be passed directly to a deployable actor at test time.
 
-\paragraph{Observation history.}
-The base \texttt{Go2-Rebounce-Trampoline} environment uses the instantaneous
-deployable actor observation. The separate
-\texttt{Go2-Rebounce-Trampoline-history} environment enables actor observation
-history with
+\paragraph{Observation groups.}
+The standard deployable actor uses only
 \[
-    H = 5
+    \bm{o}^{\pi}_t = \bm{o}^{\mathrm{dep}}_t.
 \]
-manager steps. Since the control step is $\Delta t=0.02$ s, the flattened actor
-input contains roughly $0.1$ s of recent deployable observations/actions:
+The privileged critic appends base state,
 \[
+    \bm{o}^{V}_t =
+    \left[\bm{o}^{\mathrm{dep}}_t,\bm{o}^{\mathrm{base}}_t\right],
+\]
+and the privileged teacher appends both base and trampoline information,
+\[
+    \bm{o}^{T}_t =
     \left[
-        \bm{o}^{\pi,\mathrm{deploy}}_{t-H+1},
-        \ldots,
-        \bm{o}^{\pi,\mathrm{deploy}}_{t}
+        \bm{o}^{\mathrm{dep}}_t,
+        \bm{o}^{\mathrm{base}}_t,
+        \bm{o}^{\mathrm{tramp}}_t
     \right].
 \]
-The history dimension is flattened by Isaac Lab before being passed to the MLP.
-Only the actor policy group uses this history; the privileged critic remains an
-instantaneous full-state critic. This keeps the experiment focused on whether a
-memoryless MLP with short deployable history can infer trampoline phase and
-damping better than the previous instantaneous MLP+DR baseline.
+Recurrent teacher variants may omit the quaternion depending on the concrete
+environment class, but they still follow the same separation: deployable terms
+plus privileged base/trampoline terms.
 
-The initial $H=10$ setting was motivated by the fixed-condition evaluation
-statistics. Using the rough ballistic estimate
+\paragraph{Observation history.}
+The history environment stacks deployable observations only. It does not stack
+or expose privileged base or trampoline observations to the actor. With history
+length $H$, the actor input is
+\begin{equation}
+    \bm{o}^{\pi,H}_t =
+    \left[
+        \bm{o}^{\mathrm{dep}}_{t-H+1},
+        \ldots,
+        \bm{o}^{\mathrm{dep}}_{t}
+    \right],
+\end{equation}
+and Isaac Lab flattens the history dimension before passing it to the MLP. The
+current history length is
 \[
-    T_{\mathrm{period}}\approx \frac{20}{N_{\mathrm{apex}}},
-    \qquad
-    T_{\mathrm{air}}\approx 2\sqrt{\frac{2h_{\mathrm{apex}}}{g}},
-    \qquad
-    T_{\mathrm{stance}}\approx T_{\mathrm{period}}-T_{\mathrm{air}},
+    H=10.
 \]
-the estimated trampoline support/control time is approximately
-$0.12$ s for $h^*=0.5$, $0.18$ s for $h^*=0.85$, and $0.22$ s for
-$h^*=1.2$. Grouping by stiffness gives about $0.21$ s for
-$E=2.0\times10^4$, $0.16$ s for $E=4.0\times10^4$, and $0.14$ s for
-$E=8.0\times10^4$. Thus a $0.2$ s observation-history window would cover most
-or all of the support phase for the current evaluation conditions. In practice,
-however, the flattened $H=10$ MLP struggled to discover valid apexes from
-scratch and converged toward a passive low-work behavior. The shorter $H=5$
-setting preserves some recent interaction information while reducing the actor
-input dimension and keeping early hopping exploration easier.
+Since the control step is
+\[
+    \Delta t = 4\times0.005\ \mathrm{s}=0.02\ \mathrm{s},
+\]
+this corresponds to
+\[
+    T_{\mathrm{hist}} = H\Delta t = 10\times0.02 = 0.20\ \mathrm{s}.
+\]
+Thus the history MLP receives the most recent $0.20$ s of deployable robot
+observations and previous actions.
+
+\paragraph{Actions.}
+The policy action is a 12-DoF joint-position target with the default Go2 joint
+offset and action scale from the environment config. In the trampoline variant,
+a separate non-policy action term continuously repins the trampoline rim; this
+term does not consume policy actions.
 
 \section{Apex Event and Metrics}
 
@@ -347,7 +349,6 @@ The weighted reward is
     R_t = \Delta t \Big(
         &-250\,r^{\mathrm{fail}}_t
         +50\,r^{\mathrm{apex}}_t \\
-        &+50\,r^{\mathrm{bootstrap}}_t \\
         &-1.5\times10^{-2}\,r^{\mathrm{energy}}_t \\
         &-2\,r^{\mathrm{orient}}_t
         -0.5\,r^{\mathrm{inplace}}_t
@@ -392,17 +393,6 @@ The apex pulse reward is
     g^{\mathrm{flat}}_t.
 \end{equation}
 
-For early-stage RNN and partial-observation training, a temporary bootstrap
-bonus is added:
-\begin{equation}
-    r^{\mathrm{bootstrap}}_t =
-    \mathbb{I}[b^{\mathrm{valid}}_{t-1}].
-\end{equation}
-It is intentionally not a final objective. Its role is to make ``produce any
-valid apex'' a strong positive learning signal before the policy has discovered
-the rebound cycle. A curriculum sets the weight of this term to zero after
-$1000$ PPO iterations.
-
 The remaining penalties are standard orientation, action-rate, joint-deviation,
 and joint-position-limit regularizers. The in-place term penalizes drift from
 the reset xy position and reset yaw:
@@ -434,12 +424,6 @@ energy pulse of $W^{\mathrm{abs}}/h^{*}\approx 250$ contributes
     -1.5\times10^{-2}\cdot250\cdot0.02/20 \approx -0.00375
 \]
 to the logged \texttt{Episode\_Reward/energy\_penalty} for one valid apex.
-During the bootstrap phase, one valid apex also contributes
-\[
-    50 \cdot 0.02 / 20 = 0.05
-\]
-to \texttt{Episode\_Reward/valid\_apex\_bonus}; this term is switched off
-after the early discovery phase.
 
 \section{Implementation Files}
 
@@ -451,7 +435,7 @@ File & Purpose \\
 \texttt{go2\_rebounce\_env\_cfg.py} & scene, reset, reward, termination config \\
 \texttt{mdp/commands.py} & rebounce command, apex metrics, re-arm state, energy metrics \\
 \texttt{mdp/events.py} & reset from sampled drop height \\
-\texttt{mdp/rewards.py} & height reward, valid-apex bootstrap reward, energy penalty, and failure pulses \\
+\texttt{mdp/rewards.py} & height reward, energy penalty, and failure pulses \\
 \texttt{mdp/terminations.py} & timeout-without-apex termination \\
 \texttt{scripts/rsl\_rl/play-rebounce.py} & play script with apex height and energy printout \\
 \hline
@@ -478,10 +462,11 @@ state, run ID, checkpoint, and videos. The expected healthy indicators are:
 \subsection{Step 1: Decouple Initial Drop Height from Target Apex Height}
 
 This has been implemented in the current setup. The target apex height and
-the initial drop height are sampled independently from the same range during
-training:
+the initial drop height are sampled independently. The target uses a short
+hopping-init curriculum; the drop height always uses the full range:
 \[
-    h^{*} \sim \mathcal{U}(0.5, 1.2), \qquad
+    h^{*}=0.5\ \text{before }1000\times24\text{ steps, then }
+    h^{*}\sim \mathcal{U}(0.5,1.2), \qquad
     h_{\mathrm{drop}} \sim \mathcal{U}(0.5, 1.2).
 \]
 The height rewards and metrics now compare apex height against $h^{*}$ rather
@@ -576,21 +561,17 @@ With the current $\Delta t=0.02$ s, the current absolute-work trial weight is
 \[
     w_{\mathrm{energy}} = -1.5\times10^{-2}.
 \]
-The temporary valid-apex bootstrap reward starts with
-\[
-    w_{\mathrm{bootstrap}} = 50
-\]
-and is disabled after $1000$ PPO iterations:
-\[
-    N_{\mathrm{bootstrap}} = 1000 \times 24 = 24000
-\]
-manager steps. This makes the first part of training mainly about discovering
-the rebounding cycle. The bootstrap term should remain absent in final
-comparisons and ablations unless the experiment explicitly studies training
-curriculum.
 
-The trampoline-parameter randomization is also delayed to the same threshold.
-Before $24000$ manager steps, resets use a fixed trampoline
+The current training curriculum has two switches. First, the hopping-init phase
+keeps the commanded target at $h^*=0.5$ m and keeps the trampoline fixed:
+\[
+    N_{\mathrm{init}} = 1000 \times 24 = 24000
+\]
+manager steps. Before this threshold, resets use
+\[
+    h^*=0.5
+\]
+and the fixed trampoline
 \[
     E=8.0\times10^4,\quad
     m=10,\quad
@@ -598,20 +579,17 @@ Before $24000$ manager steps, resets use a fixed trampoline
     d_e=0.02,\quad
     \nu=0.35.
 \]
-After that point, reset-time randomization switches to the configured DR
-ranges. This keeps early RNN training close to the fixed-parameter setting that
-can already discover hopping, then introduces trampoline variation only after
-valid apexes are reachable.
+After this threshold, the target range returns to
+$h^*\sim\mathcal{U}(0.5,1.2)$ and reset-time trampoline randomization switches
+to the configured DR ranges. The drop-height range is unchanged by this
+curriculum.
 
-For training stability, the energy weight is not active from the first iteration.
-The energy reward term starts with zero weight, and a curriculum switches it to
-$-1.5\times10^{-2}$ after $1000$ PPO iterations. Since the PPO runner uses
-$24$ manager steps per iteration, the curriculum threshold is
+Second, the energy reward term starts with zero weight and is enabled later:
 \[
-    N_{\mathrm{energy}} = 1000 \times 24 = 24000
+    N_{\mathrm{energy}} = 5000 \times 24 = 120000.
 \]
-manager steps. This lets the policy first discover sustained valid-apex
-rebounding before the sparse work-per-height penalty can make passive
+This lets the policy first discover sustained rebounding and then adapt to
+trampoline variation before the sparse work-per-height penalty can make passive
 non-jumping attractive.
 The positive-work term penalizes active mechanical energy injected by the
 motors:
@@ -679,7 +657,8 @@ $W^{-}_{\mathrm{episode}}/\max(W^{\mathrm{abs}}_{\mathrm{episode}},\epsilon)$ \\
 After the policy can discover rebounding on the fixed trampoline, introduce
 trampoline randomization. In the current training config, this is done as a
 curriculum: the first $1000$ PPO iterations use the fixed trampoline listed
-above, and only later resets sample the random ranges. The current Go2 rebounce
+above while the target height is fixed at $0.5$ m. Later resets sample the
+random ranges and restore the full target range. The current Go2 rebounce
 trampoline setup uses multi-parameter randomization over stiffness, mass,
 friction, material damping, and Poisson ratio:
 \[
@@ -753,571 +732,224 @@ optimization, leg regulation, or trampoline dynamics. It can also encourage a
 more conservative active-jumping strategy that is robust but less clearly
 trampoline-efficient.
 
-The randomized parameters should not be provided directly to the deployable
-actor policy, since the real robot does not know the true trampoline stiffness,
-mass, or damping. For the paper narrative, the adaptation methods should be
-tested in increasing order of complexity:
+
+\section{Methods}
+
+All deployable methods use the same deployable actor observation unless noted
+otherwise: commanded target height, projected gravity, base angular velocity,
+joint position, joint velocity, and previous action. The deployable actor does
+not receive root position, root quaternion, base linear velocity, or true
+trampoline parameters. The critic may remain privileged during PPO training.
+The table uses short environment labels; the full task IDs are listed in the
+environment-variant table above.
+
 \begin{center}
 \small
-\begin{tabular}{p{0.20\linewidth}p{0.42\linewidth}p{0.26\linewidth}}
+\begin{tabular}{@{}p{0.18\linewidth}p{0.24\linewidth}p{0.33\linewidth}p{0.13\linewidth}@{}}
 \hline
-Method & Description & Purpose \\
+Method & Environment & Actor input & Purpose \\
 \hline
-MLP + DR & train one memoryless policy across randomized trampoline stiffness;
-no trampoline parameters and no history in the actor observation & baseline
-robust policy \\
-MLP + history & stack recent observations/actions and feed the flattened history
-to an MLP & test whether short-term interaction history is enough \\
-RNN policy & use an LSTM/GRU policy to infer hidden trampoline dynamics from
-longer temporal context & test recurrent online adaptation \\
-Teacher with true trampoline parameters & append true $E$, $m$, $\nu$,
-$\mu_d$, and damping to the actor observation & privileged upper bound and RMA
-teacher \\
-Teacher-student distillation & train a deployable student to imitate the
-privileged teacher's action using RSL-RL \texttt{StudentTeacher} distillation &
-standalone method between plain history/RNN and full RMA \\
-RMA / latent estimator & train with privileged dynamics information, then learn
-a deployable latent estimator from history & final sim-to-real adaptation story
-\\
+MLP + DR &
+\texttt{Trampoline} &
+instantaneous deployable observation &
+robust baseline \\
+MLP + history &
+\texttt{Trampoline-history} &
+flattened deployable observation history, $H=10$ &
+short-horizon temporal inference \\
+RNN &
+\texttt{Trampoline-RNN} &
+instantaneous deployable observation plus recurrent state &
+online temporal inference \\
+Privileged teacher &
+\texttt{Trampoline-Teacher} &
+deployable terms plus root state and true trampoline parameters &
+upper bound \\
+MLP student &
+\texttt{Trampoline-Student} &
+deployable history, trained by action distillation &
+compress teacher behavior \\
+RNN student &
+\texttt{RNN-Student} &
+instantaneous deployable observation plus recurrent state, trained by action
+distillation &
+recurrent deployable student \\
+RMA &
+future variant &
+deployable observation plus learned latent dynamics code &
+explicit adaptation \\
 \hline
 \end{tabular}
 \end{center}
-Privileged trampoline parameters may be used by the critic, teacher, or
-adaptation module during training, but not as direct actor inputs for a policy
-intended to transfer to hardware.
 
-The first method is intentionally a partially observable baseline. Since the
-actor sees neither the trampoline parameter nor interaction history, it cannot
-condition its timing or leg impedance on the current stiffness. The expected
-failure mode is therefore an averaged strategy: performance on the soft
-trampoline, e.g. $E=4.0\times10^4$, may improve compared with a policy trained
-only at $E=8.0\times10^4$, but nominal-stiffness performance may degrade and
-the hard trampoline, e.g. $E=1.6\times10^5$, may require a different timing
-compromise. This creates the justification for the later methods: history,
-recurrence, or an RMA-style latent estimator should recover stiffness-dependent
-behavior while keeping the deployable actor free of privileged trampoline
-parameters.
+\subsection{MLP + DR}
 
-\paragraph{Teacher-student distillation.}
-The first student method uses the built-in RSL-RL
-\texttt{DistillationRunner}. A trained privileged teacher policy is loaded from
-a PPO checkpoint. The teacher observation group matches
-\texttt{Go2-Rebounce-Trampoline-Teacher}: deployable terms plus root position,
-base linear velocity, and normalized true trampoline parameters. The student
-observation group remains deployable. In the MLP student variant,
-\texttt{Go2-Rebounce-Trampoline-Student}, the student receives the same
-flattened $H=5$ actor history as the history baseline. In
-\texttt{Go2-Rebounce-Trampoline-RNN-Student}, the student receives the
-instantaneous deployable observation and carries temporal information in an
-LSTM hidden state.
+The MLP + DR policy is the deployable baseline. It is trained directly with PPO
+on the trampoline task using the instantaneous deployable actor observation.
+The actor is intentionally partially observable: it must handle changes in
+trampoline stiffness, mass, damping, friction, and Poisson ratio without being
+told their values.
 
-The RSL-RL configuration uses
+Training uses the same hopping-init curriculum as the environment: before
+$1000\times24$ manager steps, the target height is fixed at $0.5$ m and the
+trampoline is fixed. After that, the target range returns to $[0.5,1.2]$ m and
+the trampoline parameters are randomized on reset. The energy penalty remains
+disabled until $5000\times24$ manager steps.
+
+\subsection{MLP + History}
+
+The history baseline keeps the same MLP policy class but replaces the actor
+input with a flattened history of deployable observations. The current history
+length is
+\[
+    H=10,
+\]
+which corresponds to $0.2$ s at the $0.02$ s control step. The critic remains
+instantaneous and privileged. This method tests whether a short explicit window
+is enough to infer bounce phase and trampoline response without recurrent
+state.
+
+\subsection{RNN}
+
+The RNN policy uses the instantaneous deployable observation at each control
+step and carries temporal information in its recurrent hidden state. This keeps
+the per-step actor input compact while allowing the policy to infer trampoline
+dynamics from recent interaction history. The first recurrent implementation is
+an LSTM policy.
+
+The RNN is evaluated under the same task, reward, curriculum, and fixed-condition
+evaluation protocol as the MLP methods. Any gain should therefore come from
+temporal inference rather than extra privileged information.
+
+\subsection{Privileged Teacher}
+
+The privileged teacher is a PPO policy trained with an augmented actor
+observation. In addition to the deployable terms, the teacher receives root
+state and normalized true trampoline parameters. The trampoline parameter vector
+contains stiffness, mass, friction, damping, damping scale, and Poisson ratio in
+the normalized form defined by the observation term.
+
+This teacher is not deployable. Its purpose is to measure an upper bound for
+what a policy could do if it knew the hidden trampoline dynamics and full root
+state. It also provides the action source for teacher-student distillation.
+
+\subsection{Teacher-Student Distillation}
+
+The distillation methods use RSL-RL's \texttt{DistillationRunner}. A trained
+privileged PPO checkpoint is loaded into the teacher network. During
+distillation, the teacher receives the privileged \texttt{teacher} observation
+group and the student receives the deployable \texttt{policy} observation group:
 \[
     \texttt{obs\_groups}
     =
     \{\texttt{"policy"}:[\texttt{"policy"}],
       \texttt{"teacher"}:[\texttt{"teacher"}]\}.
 \]
-The keys on the left are the observation sets consumed by the RSL-RL
-distillation algorithm. The lists on the right are the IsaacLab observation
-groups exposed by the environment and concatenated for each set. Thus the
-student network receives only the environment's \texttt{policy} group, while
-the teacher network receives only the environment's \texttt{teacher} group.
-This is analogous to PPO's usual asymmetric mapping
-\texttt{\{"policy": ["policy"], "critic": ["critic"]\}}, except that
-distillation has no critic and instead uses a privileged teacher action target.
 
-In IsaacLab/RSL-RL distillation, the teacher action is computed without
-gradient from the privileged observation,
-\begin{equation}
-    \bm{a}^{T}_t
-    =
-    \pi_T(\bm{o}^{T}_t),
-    \qquad
-    \bm{o}^{T}_t
-    =
-    \mathrm{concat}\bigl(
-        \texttt{obs}[\texttt{"teacher"}]
-    \bigr),
-\end{equation}
-and the student action used in the loss is the deterministic student output,
-\begin{equation}
-    \bm{a}^{S}_t
-    =
-    \mu_S(\bm{o}^{S}_t),
-    \qquad
-    \bm{o}^{S}_t
-    =
-    \mathrm{concat}\bigl(
-        \texttt{obs}[\texttt{"policy"}]
-    \bigr).
-\end{equation}
-For the recurrent student, $\mu_S$ also depends on its hidden state, which is
-updated from the deployable observation history. The per-update behavior loss
-is
-\begin{equation}
+The teacher action is computed without gradient,
+\[
+    \bm{a}^{T}_t = \pi_T(\bm{o}^{T}_t),
+\]
+and the student is optimized to match it:
+\[
     \mathcal{L}_{\mathrm{distill}}
     =
     \frac{1}{|\mathcal{B}|}
     \sum_{t\in\mathcal{B}}
     \left\|
-        \mu_S(\bm{o}^{S}_t)
-        -
-        \pi_T(\bm{o}^{T}_t)
-    \right\|_2^2,
-\end{equation}
-or the same expression with a Huber loss if \texttt{loss\_type=huber}. The
-teacher checkpoint is loaded into the teacher network, and only the student
-parameters are optimized during distillation.
-This is not yet full RMA: the student is not explicitly supervised to match a
-privileged latent dynamics code. It is nevertheless a separate method because
-it tests whether privileged teacher behavior can be compressed into a
-deployable history/RNN policy before introducing a custom latent adaptation
-module.
+        \mu_S(\bm{o}^{S}_t)-\pi_T(\bm{o}^{T}_t)
+    \right\|_2^2.
+\]
+The MLP student uses the same flattened deployable history as the history
+baseline. The recurrent student uses instantaneous deployable observations and
+stores temporal information in the recurrent state.
 
-\paragraph{Preliminary fixed-condition result.}
-A first evaluation sweep compared two policies: a stiffness-randomized policy
-trained with
-\[
-    E\sim \mathrm{LogUniform}(4.0\times10^4,1.6\times10^5)
-\]
-and a fixed-trampoline policy trained only at
-$E=8.0\times10^4$, $m=10$ kg. Both policies were evaluated on fixed
-conditions
-\[
-    E\in\{4.0\times10^4,8.0\times10^4,1.6\times10^5\},
-    \qquad
-    h^*\in\{0.5,0.65,0.8\}.
-\]
-The stiffness-randomized MLP achieved $100\%$ success on all nine conditions
-and maintained low height error, with overall
-\[
-    \mathrm{MAE}=0.014\ \mathrm{m},
-    \qquad
-    |\mathrm{bias}|=0.011\ \mathrm{m}.
-\]
-The fixed-$8.0\times10^4$ policy performed well at and above its training
-stiffness, but failed to generalize to the soft trampoline. In particular, at
-$(E,h^*)=(4.0\times10^4,0.5)$ it had $0\%$ success due to
-\texttt{no\_valid\_apex\_timeout}, and at
-$(E,h^*)=(4.0\times10^4,0.65)$ it systematically under-jumped with
-\[
-    \mathrm{MAE}=0.103\ \mathrm{m},
-    \qquad
-    h/h^*=0.842.
-\]
-This supports the first-stage story that domain randomization improves
-robustness to trampoline stiffness. However, the randomized policy is not
-strictly better in all metrics: compared with the fixed policy, it uses more
-motor work per target height and has higher orientation RMS on the nominal and
-stiff trampolines. Averaged over all fixed evaluation settings, the randomized
-policy had
-\[
-    W^{+}/h^* \approx 159,
-    \quad
-    W^{\mathrm{abs}}/h^* \approx 247,
-    \quad
-    \mathrm{orientation\_rms}\approx0.092,
-\]
-while the fixed policy had
-\[
-    W^{+}/h^* \approx 138,
-    \quad
-    W^{\mathrm{abs}}/h^* \approx 207,
-    \quad
-    \mathrm{orientation\_rms}\approx0.063.
-\]
-Thus the current MLP+DR policy is a robust average strategy: it solves height
-tracking across stiffness, but it appears less energy-efficient and slightly
-less posture-stable than a policy specialized to the nominal trampoline.
+\subsection{RMA}
 
-\paragraph{Latest trampoline-parameter sweep.}
-A later fixed-condition sweep evaluated the current DR policy on $27$
-conditions:
-\[
-    h^*\in\{0.5,0.85,1.2\},
-    \qquad
-    E\in\{2.0\times10^4,4.0\times10^4,8.0\times10^4\},
-    \qquad
-    d_e\in\{0.01,0.05,0.1\},
-\]
-with $m=10$, $\mu_d=0.75$, \texttt{damping\_scale}=1.0, and
-$\nu=0.35$. Each condition used $64$ rollouts. The policy was stable:
-$26/27$ conditions had $100\%$ success, and the only non-perfect condition was
-$(h^*,E,d_e)=(1.2,8.0\times10^4,0.01)$ with one
-\texttt{no\_valid\_apex\_timeout} failure.
+RMA is the planned explicit adaptation variant. A privileged training pathway
+may use true trampoline parameters or a privileged dynamics code, but the final
+deployable policy should receive only onboard observations and a latent code
+estimated from recent history. This separates two questions: whether privileged
+dynamics information is useful, and whether that information can be inferred
+online without direct access to the true trampoline parameters.
 
-Height tracking remains strong for moderate targets but the high target becomes
-a useful stress test:
-\[
-\begin{array}{c|ccc}
-h^* & 0.5 & 0.85 & 1.2 \\
-\hline
-\mathrm{MAE}\ [\mathrm{m}] & 0.016 & 0.024 & 0.140 \\
-\mathrm{bias}\ [\mathrm{m}] & +0.004 & -0.009 & -0.115 \\
-h/h^* & 1.009 & 0.989 & 0.904
-\end{array}
-\]
-Thus the main failure mode at $h^*=1.2$ is not random falling but systematic
-under-jumping. Damping has the clearest effect:
-\[
-\begin{array}{c|ccc}
-d_e & 0.01 & 0.05 & 0.10 \\
-\hline
-\mathrm{MAE}\ [\mathrm{m}] & 0.035 & 0.045 & 0.101 \\
-\mathrm{bias}\ [\mathrm{m}] & +0.011 & -0.035 & -0.096 \\
-W^+/h^* & 211 & 281 & 309
-\end{array}
-\]
-Low damping is easier and more energy-efficient but produces more xy drift;
-high damping dissipates trampoline energy, increases active motor work, and
-causes under-jumping, especially for $h^*=1.2$. This suggests that future
-adaptation methods should be evaluated on high-target/high-damping stress
-settings in addition to ordinary moderate-height tracking.
+\section{Evaluation Metrics}
 
-\paragraph{Flattened-history MLP result.}
-A controlled comparison then evaluated the deployable MLP+DR baseline without
-actor history against the same policy class with flattened actor history
-$H=5$. The evaluation used the same $27$ fixed conditions above. Overall, the
-two methods were close, but $H=5$ did not produce a clear advantage:
-\[
-\begin{array}{c|cc}
-\text{metric} & \text{no history} & H=5 \\
-\hline
-\text{success rate} & 0.999 & 0.988 \\
-\mathrm{MAE}\ [\mathrm{m}] & 0.060 & 0.083 \\
-\mathrm{RMSE}\ [\mathrm{m}] & 0.065 & 0.088 \\
-\mathrm{bias}\ [\mathrm{m}] & -0.040 & -0.065 \\
-h/h^* & 0.967 & 0.946 \\
-W^+/h^* & 267 & 258 \\
-W^{\mathrm{abs}}/h^* & 351 & 339 \\
-\mathrm{xy\ drift}\ [\mathrm{m}] & 0.089 & 0.086
-\end{array}
-\]
-The short-history policy was slightly more energy-conservative and had similar
-xy drift, but it under-jumped more, especially in the high-target stress case.
-For $h^*=1.2$, the no-history MLP had
-\[
-    \mathrm{MAE}=0.140\ \mathrm{m},\qquad h/h^*=0.904,
-\]
-whereas the $H=5$ history MLP had
-\[
-    \mathrm{MAE}=0.213\ \mathrm{m},\qquad h/h^*=0.836.
-\]
-The $H=10$ history run was more problematic: it often failed to discover valid
-apexes and converged toward a passive behavior with low work but no sustained
-rebounding. This suggests that flattened history gives the MLP access to
-useful temporal information, but also increases the optimization burden and
-can encourage conservative under-jumping when energy penalties are active.
-Thus the next fair comparison should use a recurrent policy with the same
-instantaneous deployable observation rather than a longer flattened history
-vector.
-
-\paragraph{Privileged teacher result.}
-A privileged teacher policy was trained with the actor observation
-$\bm{o}^{\mathrm{teacher}}$ that adds world root position, base linear
-velocity, and the standardized trampoline parameter vector
-$\bm{o}^{\mathrm{tramp}}$ to the deployable observation. The teacher does
-not use the bootstrap curriculum. On the same $27$ fixed conditions as the
-deployable MLP+DR baseline, the teacher achieves uniformly better tracking,
-posture, and energy efficiency:
-\[
-\begin{array}{c|cc}
-\text{metric} & \text{baseline} & \text{teacher} \\
-\hline
-\text{success rate} & 0.999 & 0.989 \\
-\mathrm{MAE}\ [\mathrm{m}] & 0.060 & 0.018 \\
-\mathrm{bias}\ [\mathrm{m}] & -0.040 & -0.009 \\
-h/h^* & 0.967 & 0.988 \\
-W^+/h^* & 267 & 231 \\
-W^{\mathrm{abs}}/h^* & 351 & 337 \\
-\mathrm{xy\ drift}\ [\mathrm{m}] & 0.089 & 0.030 \\
-\mathrm{orientation\ rms} & 0.110 & 0.066
-\end{array}
-\]
-The most important difference is at the high-target high-damping stress
-condition. The baseline systematically under-jumps at $h^*=1.2$ with
-$h/h^*=0.904$, and at $(h^*,E,d_e)=(1.2,2.0\times 10^4,0.10)$ it survives
-the full episode but never matches the target
-($\mathtt{matched}=0$, $h/h^*=0.736$). The teacher recovers tracking
-under the same conditions, with $h/h^*=0.985$ averaged across $h^*=1.2$,
-even while occasionally falling at the softest, highest-damping corner.
-This indicates that explicit knowledge of trampoline stiffness, mass,
-damping, friction, and Poisson ratio is sufficient to reach commanded
-heights at high-stress conditions where a memoryless deployable policy
-cannot. The teacher's residual failures at $(h^*=1.2, d_e=0.10)$ are
-honest base-orientation falls rather than the baseline's "alive but not
-tracking" mode, so the success-rate gap should be read together with the
-matched-apex count: a slightly lower success rate with $\mathtt{matched}
-\approx \mathtt{apex}$ is preferable to perfect survival with
-$\mathtt{matched}=0$.
-
-\paragraph{Reward exploitation by the teacher at low damping.}
-The teacher does not, however, track every condition equally well. At
-$h^*=0.5$ with $d_e=0.01$ it systematically under-jumps with
-$h/h^*\in[0.93, 0.97]$, while bouncing far more frequently than the
-baseline:
-\[
-\begin{array}{c|cccc}
-(h^*=0.5, d_e=0.01) &
-\mathrm{apex}_{\mathrm{teacher}} &
-\mathrm{apex}_{\mathrm{base}} &
-(h/h^*)_{\mathrm{teacher}} &
-W^+/h^*_{\mathrm{teacher}} \\
-\hline
-E=2.0\times 10^4 & 29.1 & 24.5 & 0.932 & 146 \\
-E=4.0\times 10^4 & 34.0 & 26.0 & 0.975 & 105 \\
-E=8.0\times 10^4 & 40.0 & 28.0 & 0.962 & \hphantom{0}77
-\end{array}
-\]
-This is a deliberate reward-shape exploit, not a tracking failure. The
-energy penalty $-1.5\times 10^{-2}\,W^+/h^*$ is normalized by the
-commanded $h^*$, so under-shooting does not increase the energy cost
-denominator. With low damping the trampoline returns most of the impact
-energy elastically and the natural bounce frequency is high, so each
-additional valid apex event costs almost no extra joint work. For the
-teacher at $E=2.0\times 10^4$, $h^*=0.5$, $d_e=0.01$ the per-apex net
-contribution to the raw reward stream is approximately
-\[
-50\,\exp\!\left(-(0.034/0.10)^2\right)
-- 1.5\times 10^{-2}\cdot 146
-\approx 42.3,
-\]
-giving an episode-aggregate of $29.1\times 42.3\approx 1230$ versus the
-baseline's $24.5\times 44.7\approx 1095$. The teacher prefers
-high-frequency low-amplitude bouncing whenever the commanded height is
-low and the trampoline is elastic, because it can use the privileged
-trampoline parameters to identify these conditions and trade a small
-height tracking error for an extra apex pulse on every cycle. The exploit
-disappears at higher targets or higher damping because the trampoline
-absorbs energy and the policy must inject active work to maintain any
-rebound. Possible reward design changes that would close this loophole
-are: tightening the apex pulse standard deviation
-($\sigma=0.10\to 0.05$), normalizing energy by the achieved apex height
-$h_k^{\mathrm{apex}}$ instead of $h^*_k$, or replacing the soft Gaussian
-apex pulse with a hard tolerance gate. The current setup keeps the
-loophole open because the teacher's behavior is informative — it
-identifies a Pareto front of "track exactly versus exploit elasticity"
-that is otherwise hidden in the metrics, and motivates an energy-penalty
-redesign for future runs.
-
-\paragraph{Bootstrap reward ablation.}
-The bootstrap reward $r^{\mathrm{bootstrap}}_t$ defined earlier was
-introduced to help architectures that fail to self-discover rebounding.
-Empirically, the flattened $H=10$ MLP found no valid apex without
-bootstrap and converged to a passive low-work behavior; the bootstrap
-addresses this by giving a strong height-agnostic positive signal — any
-valid apex is rewarded with $+50$ regardless of the commanded height,
-while the energy penalty is held at zero during the bootstrap window.
-After the curriculum threshold the bootstrap is removed and the energy
-penalty is enabled. A direct ablation on the deployable MLP+DR baseline
-shows the bootstrap is harmful for architectures that can already
-self-discover rebounding. On the same $27$-condition sweep:
-\[
-\begin{array}{c|cc}
-\text{metric} & \text{no bootstrap} & \text{with bootstrap} \\
-\hline
-\text{success rate} & 0.999 & 0.979 \\
-\mathrm{MAE}\ [\mathrm{m}] & 0.060 & 0.086 \\
-h/h^* & 0.967 & 0.944 \\
-W^+/h^* & 267 & 291 \\
-\mathrm{orientation\ rms} & 0.110 & 0.147
-\end{array}
-\]
-At $(h^*=1.2, d_e=0.10)$ for every $E$, the bootstrap-trained baseline has
-$\mathtt{success\_rate}=1$ but $\mathtt{matched}\le 3$ out of
-$\mathtt{apex}\approx 21$, with $h/h^*\in[0.50, 0.63]$. The same
-conditions in the no-bootstrap baseline have $h/h^*\in[0.74, 0.83]$ and
-similarly low matched count, so the failure mode existed already but is
-amplified by the bootstrap.
-
-The mechanism is that
-$r^{\mathrm{bootstrap}}_t=\mathbb{I}[b^{\mathrm{valid}}_{t-1}]$ is
-decoupled from the commanded height. During the bootstrap window the
-optimal strategy is to trigger as many valid apex events as possible at
-any height, while the energy penalty is off. This drives the policy into
-a low-amplitude high-frequency bouncing mode. After the curriculum
-switches off the bootstrap and switches on the energy penalty, a
-partially observable policy cannot specialize behavior to trampoline
-conditions and remains trapped in this mode, especially at high targets
-where the gap between the bootstrap-era strategy and the commanded height
-is large. The teacher does not have this problem because it does not use
-the bootstrap curriculum and because the trampoline observation gives it
-the means to specialize. The no-bootstrap baseline does not have this
-problem because it never learned the height-agnostic attractor — the
-height-tracking and energy-conservation signals were both active from
-step $0$, and the policy converged to a Pareto solution rather than
-transitioning through a height-agnostic phase.
-
-The implication is that the current bootstrap is a "first-aid" mechanism
-specifically for architectures that fail to self-discover rebounding —
-RNN policies and long-history MLPs. It should not be applied to the
-simple MLP+DR baseline or to the teacher. A redesigned bootstrap that
-scales with a wide Gaussian on apex height,
-\[
-r^{\mathrm{bootstrap,wide}}_t =
-\mathbb{I}[b^{\mathrm{valid}}_{t-1}]\,
-\exp\!\left(-(e^{h,\mathrm{apex}}_t/0.5)^2\right),
-\]
-would keep the discovery signal while removing the height-agnostic
-attractor, and could in principle benefit all architectures uniformly.
-This is left for a future RNN training run.
-
-\paragraph{Observation-ablation hypothesis for RNN/RMA.}
-The earlier actor observed root position and base linear velocity. Those terms
-make the instantaneous observation highly informative: root height and vertical
-velocity expose bounce phase, impact timing, and part of the trampoline
-response. The current actor removes those terms and keeps only the deployable
-observation set, while the critic remains privileged. This makes the task more
-realistic for hardware without mocap and creates a better test bed for online
-dynamics inference. The next question is whether a memoryless MLP can still
-infer enough from the instantaneous deployable observation, or whether history,
-recurrence, or an RMA latent are needed.
-
-The proposed controlled variants are:
-\begin{center}
-\small
-\begin{tabular}{p{0.24\linewidth}p{0.42\linewidth}p{0.24\linewidth}}
-\hline
-Variant & Actor observation & Purpose \\
-\hline
-Historical full-observation MLP+DR & includes root position and base linear
-velocity & upper-bound memoryless baseline \\
-Deployable MLP+DR & no root position, no root quaternion, no base linear
-velocity & current memoryless baseline \\
-Deployable history MLP & same deployable observation, with stacked
-history/actions & test short-horizon implicit velocity/dynamics inference \\
-Deployable RNN/RMA & same deployable observation, with recurrent state or
-learned latent dynamics & test online trampoline
-identification \\
-\hline
-\end{tabular}
-\end{center}
-
-This ablation should be framed carefully. It should not artificially remove
-sensors only to make the baseline fail. It is justified if real deployment does
-not provide reliable base position or base linear velocity, or if mocap/state
-estimator signals are noisy and delayed. In that case, removing or heavily
-corrupting these observations is a realistic sim-to-real constraint. The fair
-comparison is then not ``full-observation MLP versus reduced-observation
-RNN'', but rather MLP, history-MLP, RNN, and RMA under the same deployable
-observation set. If reduced-observation MLP+DR loses height tracking while
-RNN/RMA recovers it, the paper can claim that temporal inference or latent
-dynamics estimation is needed for robust trampoline adaptation. If height
-tracking remains good even after the reduction, then RNN/RMA should be judged
-mainly on energy efficiency, posture stability, and adaptation speed.
-
-\paragraph{Next adaptation sequence.}
-The next method-development sequence is:
-\begin{enumerate}
-    \item \textbf{MLP + observation history}: this has been tested with
-    flattened $H=5$ and $H=10$ actor history. It is useful as a simple
-    baseline, but did not clearly improve performance over the instantaneous
-    MLP and can encourage conservative under-jumping.
-    \item \textbf{RNN policy}: this is the next training run. It uses the same
-    instantaneous deployable observation as the no-history MLP, but replaces
-    flattened history with a recurrent policy state. The first implementation
-    uses a one-layer LSTM with hidden size $256$. This tests whether learned
-    memory improves online adaptation without inflating the actor input
-    dimension.
-    \item \textbf{Teacher-student distillation}: train a privileged teacher
-    with true trampoline parameters, then distill its actions into either a
-    deployable history-MLP student or a deployable RNN student. This is now a
-    standalone method using RSL-RL's built-in
-    \texttt{DistillationRunner}/\texttt{StudentTeacher} implementation.
-    \item \textbf{RMA}: train a teacher or privileged module with trampoline
-    dynamics information, then train a deployable adaptation module that
-    infers a latent dynamics code from history. This is the final paper-facing
-    adaptation story if MLP+history or RNN expose a clear benefit.
-\end{enumerate}
-All deployable methods should use the same deployable observation set for a
-fair comparison. The privileged trampoline parameters may be used for critic,
-teacher, distillation targets, or latent-supervision losses, but not as direct
-actor inputs at test time.
-
-To make different trampoline dynamics visible in evaluation, run fixed
-evaluation sweeps over several discrete trampoline settings instead of relying
-only on random training averages. For each setting, compare height error,
-apex count, time-out rate, motor positive work, torque norm, contact/stance
-duration, and videos. A useful result should show that the policy adapts its
-timing, leg motion, and motor work across soft and stiff trampolines while
-maintaining the same commanded apex-height objective.
-
-For paper-level comparison, evaluate each method on fixed conditions rather
-than only on the training distribution. A condition is a pair such as
-$(E,h^*)=(4.0\times10^4,0.5)$, where the trampoline stiffness and target apex
-height are held fixed for each $20$ s rollout. Run $N$ independent rollouts per
-condition. Compute metrics within each rollout first, then report the mean and
-standard deviation across rollouts, so that an episode with many apexes does
-not dominate the statistics.
+Each method should be evaluated on fixed conditions rather than only on random
+training rollouts. A condition fixes the target height and trampoline
+parameters for a batch of independent $20$ s episodes. Metrics are computed per
+condition and then averaged across rollouts.
 
 \begin{center}
 \scriptsize
-\begin{tabular}{p{0.32\linewidth}p{0.43\linewidth}p{0.15\linewidth}}
+\begin{tabular}{p{0.28\linewidth}p{0.48\linewidth}p{0.14\linewidth}}
 \hline
 Metric & Definition & Purpose \\
 \hline
 \texttt{success\_rate} &
-fraction of rollouts that reach the $20$ s timeout without
+fraction of rollouts that reach timeout without
 \texttt{base\_orientation}, \texttt{non\_foot\_contact}, or
-\texttt{no\_valid\_apex\_timeout} & stability \\
+\texttt{no\_valid\_apex\_timeout} &
+stability \\
 \texttt{failure\_distribution} &
-counts or fractions of each failed-termination reason & failure diagnosis \\
-\texttt{apex\_count\_per\_20s} &
-number of valid apexes in one rollout & sustained hopping frequency \\
-\texttt{height\_matched\_apex\_count} &
-number of valid apexes with $|h_k-h^*_k|<0.05$\,m & strict tracking
-hops \\
-\texttt{height\_success\_rate} &
-\texttt{height\_matched\_apex\_count}/\texttt{apex\_count\_per\_20s} &
-fraction of hops that strictly track the target \\
-\texttt{height\_mae} &
-$K^{-1}\sum_{k=1}^{K}|h_k-h^*_k|$ over valid apexes in the rollout &
-absolute tracking accuracy \\
-\texttt{height\_rmse} &
-$\sqrt{K^{-1}\sum_{k=1}^{K}(h_k-h^*_k)^2}$ & sensitivity to large errors \\
-\texttt{height\_bias} &
-$K^{-1}\sum_{k=1}^{K}(h_k-h^*_k)$ & systematic under/over-shoot \\
-\texttt{mean\_h\_over\_target} &
-$K^{-1}\sum_{k=1}^{K}h_k/h^*_k$ & normalized achieved height \\
-\texttt{height\_p90\_error} &
-$90$th percentile of $|h_k-h^*_k|$ & tail robustness \\
-\texttt{pos\_work\_per\_target\_height} &
-mean over valid apex intervals of $W_k^+/h^*_k$ & active work cost \\
-\texttt{abs\_work\_per\_target\_height} &
-mean over valid apex intervals of $W_k^{\mathrm{abs}}/h^*_k$ &
-total motor work cost \\
-\texttt{braking\_ratio} &
+counts of failed-termination reasons &
+failure diagnosis \\
+\texttt{apex\_mean} &
+mean number of valid apexes per rollout &
+hopping frequency \\
+\texttt{matched\_mean} &
+mean number of apexes satisfying $|h_k-h^*_k|<0.05$ m &
+strict tracking count \\
+\texttt{height\_success\_rate\_mean} &
+\texttt{matched\_mean}/\texttt{apex\_mean}, computed per rollout then averaged &
+strict tracking rate \\
+\texttt{mae\_mean} &
+mean of $|h_k-h^*_k|$ over valid apexes &
+absolute height error \\
+\texttt{rmse\_mean} &
+root mean square of $h_k-h^*_k$ over valid apexes &
+large-error sensitivity \\
+\texttt{bias\_mean} &
+mean signed error $h_k-h^*_k$ &
+under/over jump \\
+\texttt{h\_over\_target\_mean} &
+mean ratio $h_k/h^*_k$ &
+normalized height \\
+\texttt{p90\_mean} &
+90th percentile of $|h_k-h^*_k|$ &
+tail error \\
+\texttt{pos\_target\_mean} &
+mean positive motor work per commanded target height, $W_k^+/h^*_k$ &
+active work \\
+\texttt{abs\_target\_mean} &
+mean absolute motor work per commanded target height,
+$W_k^{\mathrm{abs}}/h^*_k$ &
+total work \\
+\texttt{braking\_ratio\_mean} &
 $W^-_{\mathrm{episode}}/\max(W^{\mathrm{abs}}_{\mathrm{episode}},\epsilon)$ &
-braking versus propulsion balance \\
-\texttt{xy\_drift}, \texttt{yaw\_drift} &
-final or RMS base displacement/yaw error over the rollout & in-place behavior \\
-\texttt{orientation\_rms} &
-RMS roll/pitch or projected-gravity error & posture quality \\
+braking balance \\
+\texttt{xy\_drift\_mean} &
+rollout xy displacement from the reset position &
+in-place behavior \\
+\texttt{yaw\_drift\_mean} &
+final yaw drift from reset yaw &
+heading drift \\
+\texttt{yaw\_rms\_mean} &
+RMS yaw error over the rollout &
+heading stability \\
+\texttt{orientation\_rms\_mean} &
+RMS roll/pitch or projected-gravity error &
+posture quality \\
 \hline
 \end{tabular}
 \end{center}
 
-For height metrics, use the valid apexes detected by the command term. If
-$K=0$, the rollout should be counted as a failure and the height metrics should
-be excluded from the successful-rollout mean or reported as undefined. For
-energy metrics, the target-height denominator is preferred for method
-comparison because it does not reward jumping higher than commanded; achieved
-height normalization can still be logged as an efficiency diagnostic.
-
-\paragraph{Reporting note: success rate is not enough.}
-A successful rollout (\texttt{time\_out}=1) only certifies that the robot
-survived the $20$ s episode without a failure termination, not that it
-actually tracked the commanded height. In the bootstrap and no-bootstrap
-baseline ablations, multiple conditions at $(h^*=1.2, d_e=0.10)$ have
-\texttt{success\_rate}=1 with \texttt{height\_success\_rate}$\,<0.1$ — the
-policy stays alive by passive low-amplitude bouncing without ever reaching
-the target. To prevent this pitfall, all method comparisons should report
-\texttt{success\_rate} alongside \texttt{height\_success\_rate}; the latter
-acts as the strict task-completion metric, while the former captures
-survival. Tightening the apex tolerance from $0.25$\,m to $0.05$\,m makes
-\texttt{height\_success\_rate} a meaningful tracking quality indicator
-rather than a near-trivial survival proxy.
+Height metrics use the command-owned valid apex events. If a rollout has no
+valid apexes, its height metrics are undefined and should be interpreted
+together with \texttt{success\_rate} and \texttt{failure\_distribution}. Success
+alone is not sufficient: a policy can survive the full episode while
+under-jumping every apex, so comparisons should always report both stability
+and height-tracking metrics.
 
 \subsection{TODO: Real-Robot Observation Noise Measurement}
 

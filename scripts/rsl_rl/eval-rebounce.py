@@ -5,6 +5,7 @@
 import argparse
 import csv
 import math
+import os
 import pathlib
 import re
 import sys
@@ -14,10 +15,12 @@ from itertools import product
 
 from isaaclab.app import AppLauncher
 
+# local imports
+import cli_args  # isort: skip
+
 # add argparse arguments
 parser = argparse.ArgumentParser(description="Evaluate a rebounce RL agent with RSL-RL.")
 parser.add_argument("--task", type=str, default=None, help="Name of the task.")
-parser.add_argument("--wandb_path", type=str, required=True, help="Wandb run path (entity/project/run_id[/model]).")
 parser.add_argument("--num_envs", type=int, default=64, help="Number of parallel envs for headless evaluation.")
 parser.add_argument("--episodes_per_condition", type=int, default=20, help="Episodes collected for each condition.")
 parser.add_argument("--target_heights", type=float, nargs="+", default=[0.5, 0.65, 0.8])
@@ -58,10 +61,12 @@ parser.add_argument(
     "--csv_path",
     type=str,
     default=None,
-    help="Optional path for aggregate CSV output. The wandb run id is appended to the file name.",
+    help="Optional path for aggregate CSV output. The wandb run name, id, and checkpoint stem are appended to the file name.",
 )
 parser.add_argument("--print_episodes", action="store_true", help="Print every episode summary.")
 parser.add_argument("--progress_interval", type=int, default=16, help="Print progress after this many episodes.")
+# append RSL-RL cli arguments
+cli_args.add_rsl_rl_args(parser)
 # append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
 args_cli, hydra_args = parser.parse_known_args()
@@ -91,6 +96,7 @@ from isaaclab.envs import (
 )
 from isaaclab.utils.math import euler_xyz_from_quat
 from isaaclab_rl.rsl_rl import RslRlOnPolicyRunnerCfg, RslRlVecEnvWrapper
+from isaaclab_tasks.utils import get_checkpoint_path
 from isaaclab_tasks.utils.hydra import hydra_task_config
 
 # Import extensions to set up environment tasks
@@ -129,31 +135,22 @@ def _fmt(value: float, precision: int = 3):
     return f"{value:.{precision}f}"
 
 
-def _wandb_run_id(wandb_path: str) -> str:
-    parts = [part for part in wandb_path.strip("/").split("/") if part]
-    if not parts:
-        return "unknown"
-    if len(parts) >= 2 and parts[-1].startswith("model"):
-        return parts[-2]
-    if len(parts) >= 3:
-        return parts[2]
-    return parts[-1]
-
-
 def _sanitize_file_component(value: str) -> str:
-    sanitized = re.sub(r"[^A-Za-z0-9_.-]+", "_", value).strip("_")
+    sanitized = re.sub(r"[^A-Za-z0-9_.-]+", "_", value or "").strip("_")
     return sanitized or "unknown"
 
 
-def _csv_path_with_wandb_id(path: str, wandb_path: str) -> str:
-    run_id = _sanitize_file_component(_wandb_run_id(wandb_path))
+def _csv_path_with_run_info(path: str, run_id: str, run_name: str, checkpoint_stem: str) -> str:
+    suffix = "_".join(
+        _sanitize_file_component(component) for component in (run_name, run_id, checkpoint_stem)
+    )
     if "{wandb_id}" in path:
-        return path.replace("{wandb_id}", run_id)
+        return path.replace("{wandb_id}", suffix)
 
     path_obj = pathlib.Path(path)
     if path_obj.suffix:
-        return str(path_obj.with_name(f"{path_obj.stem}_{run_id}{path_obj.suffix}"))
-    return str(path_obj / f"rebounce_eval_{run_id}.csv")
+        return str(path_obj.with_name(f"{path_obj.stem}_{suffix}{path_obj.suffix}"))
+    return str(path_obj / f"rebounce_eval_{suffix}.csv")
 
 
 def _wrapped_angle_error(angle: torch.Tensor, reference: torch.Tensor) -> torch.Tensor:
@@ -510,35 +507,53 @@ def _append_csv_row(path: str, row: dict[str, float | str]):
     print(f"[INFO] Appended CSV row: {path_obj}", flush=True)
 
 
-def _load_checkpoint_from_wandb() -> str:
+def _load_checkpoint_from_wandb(wandb_path: str) -> tuple[str, str, str, str]:
     import wandb
 
-    run_path = args_cli.wandb_path
+    run_path = wandb_path
     api = wandb.Api()
-    if "model" in args_cli.wandb_path:
-        run_path = "/".join(args_cli.wandb_path.split("/")[:-1])
+    if "model" in wandb_path:
+        run_path = "/".join(wandb_path.split("/")[:-1])
     wandb_run = api.run(run_path)
     files = [file.name for file in wandb_run.files() if "model" in file.name]
-    if "model" in args_cli.wandb_path:
-        file = args_cli.wandb_path.split("/")[-1]
+    if not files:
+        raise RuntimeError(f"No model checkpoint files found in wandb run '{run_path}'.")
+    if "model" in wandb_path:
+        file = wandb_path.split("/")[-1]
     else:
         file = max(files, key=lambda x: int(x.split("_")[1].split(".")[0]))
 
     wandb_file = wandb_run.file(str(file))
     wandb_file.download("./logs/rsl_rl/temp", replace=True)
     print(f"[INFO]: Loading model checkpoint from: {run_path}/{file}")
-    return f"./logs/rsl_rl/temp/{file}"
+    return f"./logs/rsl_rl/temp/{file}", wandb_run.id, wandb_run.name, pathlib.Path(file).stem
+
+
+def _load_local_checkpoint(agent_cfg: RslRlOnPolicyRunnerCfg) -> tuple[str, str, str, str]:
+    log_root_path = os.path.abspath(os.path.join("logs", "rsl_rl", agent_cfg.experiment_name))
+    print(f"[INFO] Loading experiment from directory: {log_root_path}")
+    resume_path = get_checkpoint_path(log_root_path, agent_cfg.load_run, agent_cfg.load_checkpoint)
+    print(f"[INFO]: Loading model checkpoint from: {resume_path}")
+    run_name = pathlib.Path(resume_path).parent.name
+    checkpoint_stem = pathlib.Path(resume_path).stem
+    return resume_path, "local", run_name, checkpoint_stem
 
 
 @hydra_task_config(args_cli.task, "rsl_rl_cfg_entry_point")
 def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agent_cfg: RslRlOnPolicyRunnerCfg):
     """Evaluate with RSL-RL agent."""
+    agent_cfg = cli_args.update_rsl_rl_cfg(agent_cfg, args_cli)
     env_cfg = apply_play_overrides(env_cfg)
     env_cfg.scene.num_envs = args_cli.num_envs
+    if hasattr(env_cfg, "curriculum") and hasattr(env_cfg.curriculum, "hopping_init_height"):
+        env_cfg.curriculum.hopping_init_height = None
     if hasattr(env_cfg.commands, "hop"):
         env_cfg.commands.hop.resampling_time_range = (1.0e9, 1.0e9)
 
-    resume_path = _load_checkpoint_from_wandb()
+    if args_cli.wandb_path:
+        resume_path, run_id, run_name, checkpoint_stem = _load_checkpoint_from_wandb(args_cli.wandb_path)
+    else:
+        resume_path, run_id, run_name, checkpoint_stem = _load_local_checkpoint(agent_cfg)
 
     env = gym.make(args_cli.task, cfg=env_cfg)
     if isinstance(env.unwrapped, DirectMARLEnv):
@@ -557,7 +572,11 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
     hop_command, energy_command = _get_rebounce_handles(env)
     aggregate_rows = []
-    csv_path = _csv_path_with_wandb_id(args_cli.csv_path, args_cli.wandb_path) if args_cli.csv_path is not None else None
+    csv_path = (
+        _csv_path_with_run_info(args_cli.csv_path, run_id, run_name, checkpoint_stem)
+        if args_cli.csv_path is not None
+        else None
+    )
     conditions = _build_sweep_conditions()
     condition_mode = "sweep"
     if not conditions:

@@ -8,10 +8,12 @@ import sys
 
 from isaaclab.app import AppLauncher
 
+# local imports
+import cli_args  # isort: skip
+
 # add argparse arguments
 parser = argparse.ArgumentParser(description="Play an RL agent with RSL-RL.")
 parser.add_argument("--task", type=str, default=None, help="Name of the task.")
-parser.add_argument("--wandb_path", type=str, required=True, help="Wandb run path (entity/project/run_id[/model]).")
 parser.add_argument("--target_height", type=float, default=None, help="Fix the rebounce target height during play.")
 parser.add_argument("--drop_height", type=float, default=None, help="Fix the reset drop height during play.")
 parser.add_argument("--youngs_modulus", type=float, default=None, help="Fix trampoline Young's modulus during play.")
@@ -20,6 +22,8 @@ parser.add_argument("--dynamic_friction", type=float, default=None, help="Fix tr
 parser.add_argument("--elasticity_damping", type=float, default=None, help="Fix trampoline elasticity damping during play.")
 parser.add_argument("--damping_scale", type=float, default=None, help="Fix trampoline damping scale during play.")
 parser.add_argument("--poissons_ratio", type=float, default=None, help="Fix trampoline Poisson's ratio during play.")
+# append RSL-RL cli arguments
+cli_args.add_rsl_rl_args(parser)
 # append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
 args_cli, hydra_args = parser.parse_known_args()
@@ -34,6 +38,7 @@ simulation_app = app_launcher.app
 """Rest everything follows."""
 
 import gymnasium as gym
+import os
 import torch
 
 from rsl_rl.runners import DistillationRunner, OnPolicyRunner
@@ -47,6 +52,7 @@ from isaaclab.envs import (
 )
 from isaaclab.utils.math import euler_xyz_from_quat
 from isaaclab_rl.rsl_rl import RslRlOnPolicyRunnerCfg, RslRlVecEnvWrapper
+from isaaclab_tasks.utils import get_checkpoint_path
 from isaaclab_tasks.utils.hydra import hydra_task_config
 
 # Import extensions to set up environment tasks
@@ -143,6 +149,9 @@ def _set_fixed_play_condition(env_cfg):
         commands.hop.resampling_time_range = (1.0e9, 1.0e9)
         if args_cli.target_height is not None:
             commands.hop.ranges.peak_height = (args_cli.target_height, args_cli.target_height)
+            curriculum = getattr(env_cfg, "curriculum", None)
+            if curriculum is not None and hasattr(curriculum, "hopping_init_height"):
+                curriculum.hopping_init_height = None
 
     events = getattr(env_cfg, "events", None)
     if events is not None and hasattr(events, "reset_drop"):
@@ -169,6 +178,31 @@ def _set_fixed_play_condition(env_cfg):
             params["poissons_ratio_range"] = (args_cli.poissons_ratio, args_cli.poissons_ratio)
 
     return env_cfg
+
+
+def _download_checkpoint_from_wandb(wandb_path: str) -> str:
+    import wandb
+
+    run_path = wandb_path
+
+    api = wandb.Api()
+    if "model" in wandb_path:
+        run_path = "/".join(wandb_path.split("/")[:-1])
+    wandb_run = api.run(run_path)
+    files = [file.name for file in wandb_run.files() if "model" in file.name]
+    if not files:
+        raise RuntimeError(f"No model checkpoint files found in wandb run '{run_path}'.")
+
+    if "model" in wandb_path:
+        checkpoint_file = wandb_path.split("/")[-1]
+    else:
+        checkpoint_file = max(files, key=lambda x: int(x.split("_")[1].split(".")[0]))
+
+    wandb_file = wandb_run.file(str(checkpoint_file))
+    wandb_file.download("./logs/rsl_rl/temp", replace=True)
+
+    print(f"[INFO]: Loading model checkpoint from: {run_path}/{checkpoint_file}")
+    return f"./logs/rsl_rl/temp/{checkpoint_file}"
 
 
 class EpisodeStats:
@@ -278,32 +312,19 @@ def _print_episode_summary(episode_index: int, stats: dict[str, float | int | st
 @hydra_task_config(args_cli.task, "rsl_rl_cfg_entry_point")
 def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agent_cfg: RslRlOnPolicyRunnerCfg):
     """Play with RSL-RL agent."""
+    agent_cfg = cli_args.update_rsl_rl_cfg(agent_cfg, args_cli)
     # Align with mjlab: play mode is chosen by this entry script, while env-specific overrides live on the config.
     env_cfg = apply_play_overrides(env_cfg)
     env_cfg = _set_fixed_play_condition(env_cfg)
     env_cfg.scene.num_envs = 1
 
-    import wandb
-
-    run_path = args_cli.wandb_path
-
-    api = wandb.Api()
-    if "model" in args_cli.wandb_path:
-        run_path = "/".join(args_cli.wandb_path.split("/")[:-1])
-    wandb_run = api.run(run_path)
-    # loop over files in the run
-    files = [file.name for file in wandb_run.files() if "model" in file.name]
-    # files are all model_xxx.pt find the largest filename
-    if "model" in args_cli.wandb_path:
-        file = args_cli.wandb_path.split("/")[-1]
+    if args_cli.wandb_path:
+        resume_path = _download_checkpoint_from_wandb(args_cli.wandb_path)
     else:
-        file = max(files, key=lambda x: int(x.split("_")[1].split(".")[0]))
-
-    wandb_file = wandb_run.file(str(file))
-    wandb_file.download("./logs/rsl_rl/temp", replace=True)
-
-    print(f"[INFO]: Loading model checkpoint from: {run_path}/{file}")
-    resume_path = f"./logs/rsl_rl/temp/{file}"
+        log_root_path = os.path.abspath(os.path.join("logs", "rsl_rl", agent_cfg.experiment_name))
+        print(f"[INFO] Loading experiment from directory: {log_root_path}")
+        resume_path = get_checkpoint_path(log_root_path, agent_cfg.load_run, agent_cfg.load_checkpoint)
+        print(f"[INFO]: Loading model checkpoint from: {resume_path}")
 
     # create isaac environment
     env = gym.make(args_cli.task, cfg=env_cfg)

@@ -74,15 +74,15 @@
       "default": ""
     },
     {
-      "id": "teacher_load_run",
+      "id": "load_run",
       "type": "promptString",
-      "description": "Type local teacher run folder",
+      "description": "Type local run folder",
       "default": ""
     },
     {
-      "id": "teacher_checkpoint",
+      "id": "checkpoint",
       "type": "promptString",
-      "description": "Type local teacher checkpoint",
+      "description": "Type local checkpoint",
       "default": "model_.*.pt"
     },
     {
@@ -251,8 +251,8 @@
         "--task", "${input:Task}",
         "--headless",
         "--resume", "True",
-        "--load_run", "${input:teacher_load_run}",
-        "--checkpoint", "${input:teacher_checkpoint}",
+        "--load_run", "${input:load_run}",
+        "--checkpoint", "${input:checkpoint}",
         "--logger", "wandb",
         "--log_project_name", "WBT",
         "--run_name", "wbt-${input:output_name}"
@@ -321,7 +321,8 @@
         "-n", "isaaclab",
         "python", "rsl_rl/play-rebounce.py",
         "--task", "${input:Task}",
-        "--wandb_path", "${input:wandb_path}",
+        // "--wandb_path", "${input:wandb_path}",
+        "--load_run", "${input:load_run}",
         "--target_height", "${input:rebounce_target_height}",
         // "--drop_height", "${input:rebounce_drop_height}",
         "--youngs_modulus", "${input:trampoline_youngs_modulus}",
@@ -345,7 +346,8 @@
         "-n", "isaaclab",
         "python", "rsl_rl/eval-rebounce.py",
         "--task", "${input:Task}",
-        "--wandb_path", "${input:wandb_path}",
+        // "--wandb_path", "${input:wandb_path}",
+        "--load_run", "${input:load_run}",
         "--num_envs", "64",
         "--episodes_per_condition", "64",
         "--target_height", "0.85",
