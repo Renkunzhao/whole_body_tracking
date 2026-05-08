@@ -57,6 +57,7 @@ from isaaclab_tasks.utils.hydra import hydra_task_config
 
 # Import extensions to set up environment tasks
 import whole_body_tracking.tasks  # noqa: F401
+from whole_body_tracking.sensors import DobContactSensor
 from whole_body_tracking.utils.task_utils import apply_play_overrides
 
 
@@ -356,6 +357,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     apex_count = 0
     episode_count = 0
     episode_stats = EpisodeStats(env, energy_command)
+    dob_sensor = DobContactSensor(env)
 
     # simulate environment
     while simulation_app.is_running():
@@ -364,6 +366,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         with torch.inference_mode():
             actions = policy(obs)
         obs, _, dones, _ = env.step(actions)
+        dob_sensor.update()
 
         if hop_command is not None and bool(hop_command.is_apex[0]):
             apex_count += 1
@@ -377,6 +380,13 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
                 positive_work_per_height = float(energy_command.work_per_height_pulse("positive")[0])
                 absolute_work_per_height = float(energy_command.work_per_height_pulse("absolute")[0])
                 energy_text = f" pos/h={positive_work_per_height:.1f} abs/h={absolute_work_per_height:.1f} J/m"
+            dob_metrics = dob_sensor.consume_hop_metrics(0, target_height)
+            energy_text += (
+                f" dob+={dob_metrics['positive_work_per_height']:.1f} "
+                f"dob-={dob_metrics['negative_work_per_height']:.1f} "
+                f"dobR={dob_metrics['return_ratio']:.2f} "
+                f"dobFz={dob_metrics['peak_total_force_z']:.0f}N"
+            )
             print(
                 f"[A{apex_count:03d}] h={apex_height:.3f}/{target_height:.3f} "
                 f"e={error:+.3f} d={drop_height:.3f}{energy_text}",
@@ -386,9 +396,17 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         if bool(dones[0]):
             episode_count += 1
             _print_episode_summary(episode_count, episode_stats.summary(_get_done_reasons(env)))
+            dob_metrics = dob_sensor.episode_metrics(0)
+            print(
+                f"[DOB{episode_count:03d}] dobW+={dob_metrics['positive_work']:.1f} "
+                f"dobW-={dob_metrics['negative_work']:.1f} dobR={dob_metrics['return_ratio']:.2f} "
+                f"dobFz={dob_metrics['peak_total_force_z']:.0f}N",
+                flush=True,
+            )
             reset_count += 1
             apex_count = 0
             episode_stats.reset(env)
+            dob_sensor.reset()
             _print_trampoline_params(env, reset_count)
 
     # close the simulator

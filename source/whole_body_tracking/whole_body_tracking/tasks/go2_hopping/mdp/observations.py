@@ -5,6 +5,8 @@ from typing import TYPE_CHECKING
 
 import torch
 
+from whole_body_tracking.sensors import DobContactSensor
+
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
 
@@ -53,6 +55,44 @@ def trampoline_properties(
             (poissons_ratio - poissons_ratio_nominal) / poissons_ratio_scale,
             (dynamic_friction - dynamic_friction_nominal) / dynamic_friction_scale,
             torch.log(elasticity_damping.clamp_min(1.0e-6) / elasticity_damping_nominal),
+        ),
+        dim=-1,
+    )
+
+
+def get_dob_contact_sensor(env: ManagerBasedRLEnv) -> DobContactSensor:
+    sensor = getattr(env, "_dob_contact_sensor", None)
+    if sensor is None:
+        sensor = DobContactSensor(env)
+        env._dob_contact_sensor = sensor
+    sensor.update()
+    return sensor
+
+
+def dob_contact_forces(env: ManagerBasedRLEnv, force_scale: float = 1000.0) -> torch.Tensor:
+    """Flattened per-foot DOB contact forces for privileged observations."""
+    sensor = get_dob_contact_sensor(env)
+    return sensor.data.foot_forces_w.reshape(env.num_envs, -1) / force_scale
+
+
+def dob_contact_energy(
+    env: ManagerBasedRLEnv,
+    force_scale: float = 1000.0,
+    power_scale: float = 1000.0,
+    work_scale: float = 100.0,
+) -> torch.Tensor:
+    """Compact DOB contact energy state for privileged observations."""
+    sensor = get_dob_contact_sensor(env)
+    positive = sensor.data.hop_positive_work / work_scale
+    negative = sensor.data.hop_negative_work / work_scale
+    return_ratio = sensor.data.hop_positive_work / torch.clamp(-sensor.data.hop_negative_work, min=1.0e-6)
+    return torch.stack(
+        (
+            sensor.data.total_force_w[:, 2] / force_scale,
+            sensor.data.contact_power / power_scale,
+            positive,
+            negative,
+            torch.clamp(return_ratio, 0.0, 5.0),
         ),
         dim=-1,
     )

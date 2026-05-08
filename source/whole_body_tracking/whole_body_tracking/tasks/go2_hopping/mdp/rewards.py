@@ -10,6 +10,8 @@ from isaaclab.sensors import ContactSensor
 from isaaclab.utils.math import wrap_to_pi
 from isaaclab.utils.string import resolve_matching_names_values
 
+from .observations import get_dob_contact_sensor
+
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
 
@@ -201,6 +203,47 @@ def joint_mechanical_energy_penalty(
     """
     energy_cmd = env.command_manager.get_term(command_name)
     return energy_cmd.work_per_target_height_pulse(mode)
+
+
+class dob_contact_work_per_height_pulse(ManagerTermBase):
+    """DOB contact work pulse at valid apex, normalized by target height.
+
+    This term consumes the hop-local DOB work accumulators for envs where the
+    command term reports a valid apex. Use one instance of this term for DOB
+    contact-work reward or logging; multiple consuming DOB reward terms would
+    race on the same hop accumulators.
+    """
+
+    def __call__(
+        self,
+        env: ManagerBasedRLEnv,
+        command_name: str,
+        mode: str = "positive",
+    ) -> torch.Tensor:
+        sensor = get_dob_contact_sensor(env)
+        cmd = env.command_manager.get_term(command_name)
+        target = cmd.last_apex_target_height.clamp_min(1.0e-6)
+
+        if mode == "positive":
+            work = sensor.data.hop_positive_work
+        elif mode == "negative":
+            work = sensor.data.hop_negative_work
+        elif mode == "absolute":
+            work = sensor.data.hop_absolute_work
+        elif mode == "return_ratio":
+            work = sensor.data.hop_positive_work / torch.clamp(-sensor.data.hop_negative_work, min=1.0e-6)
+            target = torch.ones_like(target)
+        else:
+            raise ValueError(f"Unknown DOB contact work mode: {mode}")
+
+        value = cmd.is_apex.float() * work / target
+        if torch.any(cmd.is_apex):
+            env_ids = cmd.is_apex.nonzero(as_tuple=False).flatten()
+            sensor.data.hop_positive_work[env_ids] = 0.0
+            sensor.data.hop_negative_work[env_ids] = 0.0
+            sensor.data.hop_absolute_work[env_ids] = 0.0
+            sensor.data.hop_peak_total_force_z[env_ids] = 0.0
+        return value
 
 
 class termination_term(ManagerTermBase):
