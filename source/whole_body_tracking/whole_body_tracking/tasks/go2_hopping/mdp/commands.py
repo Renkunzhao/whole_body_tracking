@@ -10,6 +10,8 @@ from isaaclab.managers import CommandTerm, CommandTermCfg, SceneEntityCfg
 from isaaclab.sensors import ContactSensor
 from isaaclab.utils import configclass
 
+from whole_body_tracking.sensors import get_or_create_dob_contact_sensor
+
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
 
@@ -461,10 +463,18 @@ class EnergyMetricsCommand(CommandTerm):
         self._absolute_work_per_height_pulse = torch.zeros(n, device=dev)
         self._positive_work_per_target_height_pulse = torch.zeros(n, device=dev)
         self._absolute_work_per_target_height_pulse = torch.zeros(n, device=dev)
+        self._contact_positive_interval_work = torch.zeros(n, device=dev)
+        self._contact_negative_interval_work = torch.zeros(n, device=dev)
+        self._contact_prev_positive_work = torch.zeros(n, device=dev)
+        self._contact_prev_negative_work = torch.zeros(n, device=dev)
+        self._contact_prev_absolute_work = torch.zeros(n, device=dev)
+        self._contact_return_ratio = torch.zeros(n, device=dev)
+        self._contact_return_ratio_pulse = torch.zeros(n, device=dev)
 
         self.metrics["positive_work_per_height"] = torch.zeros(n, device=dev)
         self.metrics["absolute_work_per_height"] = torch.zeros(n, device=dev)
         self.metrics["braking_ratio"] = torch.zeros(n, device=dev)
+        self.metrics["contact_return_ratio"] = torch.zeros(n, device=dev)
 
     @property
     def command(self) -> torch.Tensor:
@@ -503,6 +513,14 @@ class EnergyMetricsCommand(CommandTerm):
             return self._absolute_work_per_target_height_pulse
         raise ValueError(f"Unsupported energy penalty mode: {mode!r}. Expected 'positive' or 'absolute'.")
 
+    @property
+    def contact_return_ratio(self) -> torch.Tensor:
+        return self._contact_return_ratio
+
+    @property
+    def contact_return_ratio_pulse(self) -> torch.Tensor:
+        return self._contact_return_ratio_pulse
+
     def _update_metrics(self):
         torque = self.robot.data.applied_torque[:, self._joint_ids]
         joint_vel = self.robot.data.joint_vel[:, self._joint_ids]
@@ -517,11 +535,13 @@ class EnergyMetricsCommand(CommandTerm):
         self._absolute_work += self._absolute_power * dt
         self._positive_interval_work += self._positive_power * dt
         self._absolute_interval_work += self._absolute_power * dt
+        self._update_contact_work_accumulators()
 
         self._positive_work_per_height_pulse.zero_()
         self._absolute_work_per_height_pulse.zero_()
         self._positive_work_per_target_height_pulse.zero_()
         self._absolute_work_per_target_height_pulse.zero_()
+        self._contact_return_ratio_pulse.zero_()
 
         if self.cfg.apex_command_name is not None:
             apex_cmd = self._env.command_manager.get_term(self.cfg.apex_command_name)
@@ -566,11 +586,47 @@ class EnergyMetricsCommand(CommandTerm):
                 / new_apex_count.clamp_min(1.0),
                 self._absolute_work_per_height,
             )
+            contact_absorbed_work = (-self._contact_negative_interval_work).clamp_min(1.0e-6)
+            contact_return_ratio_pulse = self._contact_positive_interval_work / contact_absorbed_work
+            self._contact_return_ratio_pulse = torch.where(
+                is_apex, contact_return_ratio_pulse, self._contact_return_ratio_pulse
+            )
+            self._contact_return_ratio = torch.where(
+                is_apex,
+                self._contact_return_ratio
+                + (contact_return_ratio_pulse - self._contact_return_ratio)
+                / new_apex_count.clamp_min(1.0),
+                self._contact_return_ratio,
+            )
+            self._contact_positive_interval_work = torch.where(
+                is_apex, torch.zeros_like(self._contact_positive_interval_work), self._contact_positive_interval_work
+            )
+            self._contact_negative_interval_work = torch.where(
+                is_apex, torch.zeros_like(self._contact_negative_interval_work), self._contact_negative_interval_work
+            )
             self._apex_count = new_apex_count
 
         self.metrics["positive_work_per_height"][:] = self._positive_work_per_height
         self.metrics["absolute_work_per_height"][:] = self._absolute_work_per_height
         self.metrics["braking_ratio"][:] = self._negative_work / self._absolute_work.clamp_min(1e-6)
+        self.metrics["contact_return_ratio"][:] = self._contact_return_ratio
+
+    def _update_contact_work_accumulators(self):
+        sensor = get_or_create_dob_contact_sensor(self._env, backend=self.cfg.contact_backend)
+        positive_work = sensor.data.positive_work
+        negative_work = sensor.data.negative_work
+        absolute_work = sensor.data.absolute_work
+        delta_positive = positive_work - self._contact_prev_positive_work
+        delta_negative = negative_work - self._contact_prev_negative_work
+        delta_absolute = absolute_work - self._contact_prev_absolute_work
+        sensor_reset = delta_absolute < 0.0
+        delta_positive = torch.where(sensor_reset, positive_work, delta_positive)
+        delta_negative = torch.where(sensor_reset, negative_work, delta_negative)
+        self._contact_positive_interval_work += delta_positive.clamp_min(0.0)
+        self._contact_negative_interval_work += delta_negative.clamp_max(0.0)
+        self._contact_prev_positive_work[:] = positive_work
+        self._contact_prev_negative_work[:] = negative_work
+        self._contact_prev_absolute_work[:] = absolute_work
 
     def _resample_command(self, env_ids: Sequence[int]):
         pass
@@ -595,6 +651,13 @@ class EnergyMetricsCommand(CommandTerm):
             self._absolute_work_per_height_pulse.zero_()
             self._positive_work_per_target_height_pulse.zero_()
             self._absolute_work_per_target_height_pulse.zero_()
+            self._contact_positive_interval_work.zero_()
+            self._contact_negative_interval_work.zero_()
+            self._contact_prev_positive_work.zero_()
+            self._contact_prev_negative_work.zero_()
+            self._contact_prev_absolute_work.zero_()
+            self._contact_return_ratio.zero_()
+            self._contact_return_ratio_pulse.zero_()
         else:
             self._positive_power[env_ids] = 0.0
             self._negative_power[env_ids] = 0.0
@@ -610,6 +673,13 @@ class EnergyMetricsCommand(CommandTerm):
             self._absolute_work_per_height_pulse[env_ids] = 0.0
             self._positive_work_per_target_height_pulse[env_ids] = 0.0
             self._absolute_work_per_target_height_pulse[env_ids] = 0.0
+            self._contact_positive_interval_work[env_ids] = 0.0
+            self._contact_negative_interval_work[env_ids] = 0.0
+            self._contact_prev_positive_work[env_ids] = 0.0
+            self._contact_prev_negative_work[env_ids] = 0.0
+            self._contact_prev_absolute_work[env_ids] = 0.0
+            self._contact_return_ratio[env_ids] = 0.0
+            self._contact_return_ratio_pulse[env_ids] = 0.0
         return extras
 
 
@@ -621,3 +691,4 @@ class EnergyMetricsCommandCfg(CommandTermCfg):
     resampling_time_range: tuple[float, float] = (1.0e9, 1.0e9)
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot", joint_names=[".*"])
     apex_command_name: str | None = "hop"
+    contact_backend: str = "gpu"

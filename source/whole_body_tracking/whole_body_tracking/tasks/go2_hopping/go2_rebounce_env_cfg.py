@@ -147,6 +147,7 @@ class CommandsCfg:
     energy = mdp.EnergyMetricsCommandCfg(
         asset_cfg=SceneEntityCfg("robot", joint_names=[".*"]),
         apex_command_name="hop",
+        contact_backend="gpu",
     )
 
 
@@ -384,14 +385,6 @@ class RewardsCfg:
         params={
             "command_name": "energy",
             "mode": "absolute",
-        },
-    )
-    dob_contact_work = RewTerm(
-        func=mdp.dob_contact_work_per_height_pulse,
-        weight=1e-2,
-        params={
-            "command_name": "hop",
-            "mode": "positive",
         },
     )
     flat_orientation = RewTerm(func=mdp.flat_orientation_l2, weight=-2.0)

@@ -252,6 +252,228 @@ offset and action scale from the environment config. In the trampoline variant,
 a separate non-policy action term continuously repins the trampoline rim; this
 term does not consume policy actions.
 
+\section{DOB Contact Sensor}
+
+Both contact-sensor implementations estimate foot contact forces with the same
+disturbance-observer structure. The difference is not the algebraic estimator,
+but the dynamics backend and the floating-base velocity convention.
+
+\paragraph{Pinocchio implementation.}
+The Pinocchio version builds a floating-base model from the URDF and uses the
+Pinocchio free-flyer convention. Its generalized velocity is
+\begin{equation}
+    \bm{v}^{P}
+    =
+    \begin{bmatrix}
+        {}^{B}\bm{v}_{WB} \\
+        {}^{B}\bm{\omega}_{WB} \\
+        \dot{\bm{q}}_j
+    \end{bmatrix},
+    \qquad
+    \bm{\tau}
+    =
+    \begin{bmatrix}
+        \bm{0}_{6} \\
+        \bm{\tau}_j
+    \end{bmatrix}.
+\end{equation}
+Here the base linear and angular velocities are expressed in the body frame.
+The measured generalized acceleration is approximated by finite difference:
+\begin{equation}
+    \dot{\bm{v}}^{P}_{\mathrm{meas},k}
+    =
+    \frac{\bm{v}^{P}_{k}-\bm{v}^{P}_{k-1}}{\Delta t}.
+\end{equation}
+Pinocchio computes
+\begin{equation}
+    \bm{M}^{P}(\bm{q}),
+    \qquad
+    \bm{h}^{P}(\bm{q},\bm{v}^{P})
+    =
+    \bm{C}^{P}(\bm{q},\bm{v}^{P})\bm{v}^{P}
+    +
+    \bm{g}^{P}(\bm{q}).
+\end{equation}
+The no-contact, free generalized acceleration is
+\begin{equation}
+    \dot{\bm{v}}^{P}_{\mathrm{free}}
+    =
+    \left(\bm{M}^{P}(\bm{q})\right)^{-1}
+    \left(
+        \bm{\tau}
+        -
+        \bm{h}^{P}(\bm{q},\bm{v}^{P})
+    \right).
+\end{equation}
+The DOB residual is
+\begin{equation}
+    \bm{r}^{P}
+    =
+    \bm{M}^{P}(\bm{q})
+    \left(
+        \dot{\bm{v}}^{P}_{\mathrm{meas}}
+        -
+        \dot{\bm{v}}^{P}_{\mathrm{free}}
+    \right),
+\end{equation}
+or equivalently
+\begin{equation}
+    \bm{r}^{P}
+    =
+    \bm{M}^{P}(\bm{q})\dot{\bm{v}}^{P}_{\mathrm{meas}}
+    +
+    \bm{h}^{P}(\bm{q},\bm{v}^{P})
+    -
+    \bm{\tau}.
+\end{equation}
+
+For foot $i$, let
+$\bm{J}^{P}_{i,\mathrm{lin}}(\bm{q})\in\mathbb{R}^{3\times n_v}$ be the
+linear foot-position Jacobian in the local-world-aligned frame. With the Go2
+joint ordering used by the code, the three-joint block for leg $i$ is
+\begin{equation}
+    \mathcal{B}_i
+    =
+    \{6+3(i-1),\ 6+3(i-1)+1,\ 6+3(i-1)+2\}.
+\end{equation}
+The estimated contact force is obtained from
+\begin{equation}
+    \left(
+        \bm{J}^{P}_{i,\mathrm{lin}}(\bm{q})[:,\mathcal{B}_i]
+    \right)^{T}
+    \bm{f}^{P}_i
+    =
+    \bm{r}^{P}[\mathcal{B}_i],
+\end{equation}
+therefore
+\begin{equation}
+    \bm{f}^{P}_i
+    =
+    \left(
+        \left(
+            \bm{J}^{P}_{i,\mathrm{lin}}(\bm{q})[:,\mathcal{B}_i]
+        \right)^{T}
+    \right)^{-1}
+    \bm{r}^{P}[\mathcal{B}_i].
+\end{equation}
+
+\paragraph{GPU / PhysX implementation.}
+The GPU version uses PhysX dynamics tensors directly and keeps the computation
+batched on the GPU. Its generalized velocity is
+\begin{equation}
+    \bm{v}^{G}
+    =
+    \begin{bmatrix}
+        {}^{W}\bm{v}_{WB} \\
+        {}^{W}\bm{\omega}_{WB} \\
+        \dot{\bm{q}}_j
+    \end{bmatrix},
+    \qquad
+    \bm{\tau}
+    =
+    \begin{bmatrix}
+        \bm{0}_{6} \\
+        \bm{\tau}_j
+    \end{bmatrix}.
+\end{equation}
+The base velocity is therefore expressed in the world frame instead of the body
+frame. The measured acceleration is
+\begin{equation}
+    \dot{\bm{v}}^{G}_{\mathrm{meas},k}
+    =
+    \frac{\bm{v}^{G}_{k}-\bm{v}^{G}_{k-1}}{\Delta t}.
+\end{equation}
+PhysX provides
+\begin{equation}
+    \bm{M}^{G}(\bm{q}),
+    \qquad
+    \bm{h}^{G}(\bm{q},\bm{v}^{G})
+    =
+    \bm{h}^{G}_{\mathrm{coriolis}}(\bm{q},\bm{v}^{G})
+    +
+    \bm{h}^{G}_{\mathrm{gravity}}(\bm{q}),
+    \qquad
+    \bm{J}^{G}_{i,\mathrm{lin}}(\bm{q}).
+\end{equation}
+The free acceleration and residual are
+\begin{equation}
+    \dot{\bm{v}}^{G}_{\mathrm{free}}
+    =
+    \left(\bm{M}^{G}(\bm{q})\right)^{-1}
+    \left(
+        \bm{\tau}
+        -
+        \bm{h}^{G}(\bm{q},\bm{v}^{G})
+    \right),
+\end{equation}
+\begin{equation}
+    \bm{r}^{G}
+    =
+    \bm{M}^{G}(\bm{q})
+    \left(
+        \dot{\bm{v}}^{G}_{\mathrm{meas}}
+        -
+        \dot{\bm{v}}^{G}_{\mathrm{free}}
+    \right)
+    =
+    \bm{M}^{G}(\bm{q})\dot{\bm{v}}^{G}_{\mathrm{meas}}
+    +
+    \bm{h}^{G}(\bm{q},\bm{v}^{G})
+    -
+    \bm{\tau}.
+\end{equation}
+Before the leg blocks are extracted, the PhysX generalized-coordinate ordering
+is permuted to match the same CSV/Pinocchio joint ordering. After this
+permutation, the same block $\mathcal{B}_i$ is used:
+\begin{equation}
+    \left(
+        \bm{J}^{G}_{i,\mathrm{lin}}(\bm{q})[:,\mathcal{B}_i]
+    \right)^{T}
+    \bm{f}^{G}_i
+    =
+    \bm{r}^{G}[\mathcal{B}_i],
+\end{equation}
+\begin{equation}
+    \bm{f}^{G}_i
+    =
+    \left(
+        \left(
+            \bm{J}^{G}_{i,\mathrm{lin}}(\bm{q})[:,\mathcal{B}_i]
+        \right)^{T}
+    \right)^{-1}
+    \bm{r}^{G}[\mathcal{B}_i].
+\end{equation}
+
+\paragraph{Where the two estimates differ.}
+The final force solve uses only the three joint-space residual rows for each
+leg. This is why the two estimates have the same leading-order interpretation
+when joint state, joint torque, and joint ordering match. The remaining
+difference enters through the floating-base part of the dynamics. In block
+form,
+\begin{equation}
+    \bm{r}_j
+    =
+    \bm{M}_{jb}
+    \left(
+        \dot{\bm{v}}_{b,\mathrm{meas}}
+        -
+        \dot{\bm{v}}_{b,\mathrm{free}}
+    \right)
+    +
+    \bm{M}_{jj}
+    \left(
+        \ddot{\bm{q}}_{j,\mathrm{meas}}
+        -
+        \ddot{\bm{q}}_{j,\mathrm{free}}
+    \right).
+\end{equation}
+The term with $\bm{M}_{jb}$ is the base-joint inertia coupling. Since
+$\bm{v}^{P}_b$ is body-frame and $\bm{v}^{G}_b$ is world-frame, this coupled
+term and the corresponding nonlinear dynamics terms are not exactly identical.
+For moderate base speeds the joint block is usually dominated by the joint
+motion and torque terms; for aggressive body rotation, impact, or tumbling, the
+coupling term can make the Pinocchio and GPU estimates visibly diverge.
+
 \section{Apex Event and Metrics}
 
 A valid apex is detected by a root vertical velocity sign change gated by the

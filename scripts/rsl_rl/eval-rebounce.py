@@ -342,6 +342,7 @@ class EpisodeStats:
         self.last_yaw_drift = 0.0
         self.negative_work = 0.0
         self.absolute_work = 0.0
+        self.contact_return_ratio = 0.0
 
     def update_state(self, env):
         robot = env.unwrapped.scene["robot"]
@@ -388,6 +389,8 @@ class EpisodeStats:
         orientation_rms = math.sqrt(self.orientation_error_sum / max(self.step_count, 1))
         yaw_rms = math.sqrt(self.yaw_error_sq_sum / max(self.step_count, 1))
         braking_ratio = self.negative_work / max(self.absolute_work, 1.0e-6)
+        if self.energy_command is not None:
+            self.contact_return_ratio = float(self.energy_command.contact_return_ratio[self.env_id])
         return {
             "success": success,
             "reason": reason,
@@ -404,6 +407,7 @@ class EpisodeStats:
             "pos_height": _mean(self.pos_work_height),
             "abs_height": _mean(self.abs_work_height),
             "braking_ratio": braking_ratio,
+            "contact_return_ratio": self.contact_return_ratio,
             "xy_drift": self.last_xy_drift,
             "yaw_drift": self.last_yaw_drift,
             "yaw_rms": yaw_rms,
@@ -435,6 +439,7 @@ def _aggregate(condition: dict[str, float | str], episodes: list[dict[str, float
         "pos_height",
         "abs_height",
         "braking_ratio",
+        "contact_return_ratio",
         "xy_drift",
         "yaw_drift",
         "yaw_rms",
@@ -454,7 +459,8 @@ def _print_episode(condition: dict[str, float | str], episode_index: int, stats:
         f"ok={int(stats['success'])} reason={stats['reason']} apex={stats['apex']} "
         f"match={stats['matched']}/{stats['apex']} "
         f"mae={_fmt(stats['mae'])} bias={_fmt(stats['bias'])} h/t={_fmt(stats['h_over_target'])} "
-        f"posT={_fmt(stats['pos_target'], 1)} absT={_fmt(stats['abs_target'], 1)}",
+        f"posT={_fmt(stats['pos_target'], 1)} absT={_fmt(stats['abs_target'], 1)} "
+        f"cR={_fmt(stats['contact_return_ratio'])}",
         flush=True,
     )
 
@@ -474,6 +480,7 @@ def _print_condition_result(result: dict[str, float | str]):
         f"h/t={_fmt(result['h_over_target_mean'])}±{_fmt(result['h_over_target_std'])} "
         f"posT={_fmt(result['pos_target_mean'], 1)}±{_fmt(result['pos_target_std'], 1)} "
         f"absT={_fmt(result['abs_target_mean'], 1)}±{_fmt(result['abs_target_std'], 1)} "
+        f"cR={_fmt(result['contact_return_ratio_mean'])}±{_fmt(result['contact_return_ratio_std'])} "
         f"xy={_fmt(result['xy_drift_mean'])}±{_fmt(result['xy_drift_std'])}",
         flush=True,
     )
