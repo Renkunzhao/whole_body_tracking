@@ -245,7 +245,7 @@ class TeacherObservationsCfg(ObservationsCfg):
         base_quat = ObsTerm(func=mdp.root_quat_w,params={"make_quat_unique": True})
         base_lin_vel = ObsTerm(func=mdp.base_lin_vel)
         trampoline_properties = ObsTerm(func=mdp.trampoline_properties)
-        dob_contact_forces = ObsTerm(func=mdp.dob_contact_forces)
+        # dob_contact_forces = ObsTerm(func=mdp.dob_contact_forces)
 
         def __post_init__(self):
             super().__post_init__()
@@ -304,6 +304,20 @@ class DistillationObservationsCfg:
 
     policy: PolicyCfg = PolicyCfg()
     teacher: TeacherCfg = TeacherCfg()
+
+
+@configclass
+class DistillationBaseObservationsCfg(DistillationObservationsCfg):
+    """Distillation observations with root pose and base linear velocity in the student."""
+
+    @configclass
+    class PolicyCfg(DistillationObservationsCfg.PolicyCfg):
+        base_pos = ObsTerm(func=mdp.root_pos_w)
+        base_quat = ObsTerm(func=mdp.root_quat_w, params={"make_quat_unique": True})
+        base_lin_vel = ObsTerm(func=mdp.base_lin_vel)
+
+    policy: PolicyCfg = PolicyCfg()
+    teacher: DistillationObservationsCfg.TeacherCfg = DistillationObservationsCfg.TeacherCfg()
 
 
 @configclass
@@ -593,6 +607,13 @@ class Go2RebounceTrampolineStudentEnvCfg(Go2RebounceTrampolineEnvCfg):
     """Distilled MLP student with deployable actor history and privileged teacher observations."""
 
     observations: DistillationObservationsCfg = DistillationObservationsCfg()
+
+
+@configclass
+class Go2RebounceTrampolineStudentBaseEnvCfg(Go2RebounceTrampolineEnvCfg):
+    """Distilled MLP student with actor history plus root pose and base linear velocity."""
+
+    observations: DistillationBaseObservationsCfg = DistillationBaseObservationsCfg()
 
 
 @configclass
