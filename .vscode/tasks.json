@@ -48,7 +48,7 @@
         "Go2-Rebounce-Trampoline-history",
         "Go2-Rebounce-Trampoline-Teacher",
         "Go2-Rebounce-Trampoline-Student",
-        "Go2-Rebounce-Trampoline-Student-base",
+        "Go2-Rebounce-Trampoline-Student-Base",
         "Go2-Rebounce-Trampoline-RNN",
         "Go2-Rebounce-Trampoline-RNN-Teacher",
         "Go2-Rebounce-Trampoline-RNN-Student",
@@ -101,7 +101,7 @@
       "id": "rebounce_target_height",
       "type": "promptString",
       "description": "Type rebounce target height",
-      "default": "0.85"
+      "default": "0.7"
     },
     {
       "id": "rebounce_drop_height",
@@ -113,7 +113,7 @@
       "id": "trampoline_youngs_modulus",
       "type": "promptString",
       "description": "Type trampoline Young's modulus",
-      "default": "8.0e4"
+      "default": "2.0e4"
     },
     {
       "id": "trampoline_mass",
@@ -131,7 +131,7 @@
       "id": "trampoline_elasticity_damping",
       "type": "promptString",
       "description": "Type trampoline elasticity damping",
-      "default": "0.02"
+      "default": "0.1"
     },
     {
       "id": "trampoline_damping_scale",
@@ -144,6 +144,12 @@
       "type": "promptString",
       "description": "Type trampoline Poisson's ratio",
       "default": "0.35"
+    },
+    {
+      "id": "video_length",
+      "type": "promptString",
+      "description": "Number of env steps to record (50 Hz control => 50 steps = 1 s).",
+      "default": "500"
     },
   ],
   "tasks": [
@@ -240,27 +246,6 @@
       "options": { "cwd": "${workspaceFolder}/scripts", "env": { "CUDA_VISIBLE_DEVICES": "1" } },
       "problemMatcher": []
     },
-    { 
-      "label": "Train Distill Local Teacher (GPU 0)",
-      "type": "shell",
-      "command": "conda",
-      "args": [
-        "run",
-        "--no-capture-output",
-        "-n", "isaaclab",
-        "python", "rsl_rl/train.py",
-        "--task", "${input:Task}",
-        "--headless",
-        "--resume", "True",
-        "--load_run", "${input:load_run}",
-        "--checkpoint", "${input:checkpoint}",
-        "--logger", "wandb",
-        "--log_project_name", "WBT",
-        "--run_name", "wbt-${input:output_name}"
-      ],
-      "options": { "cwd": "${workspaceFolder}/scripts", "env": { "CUDA_VISIBLE_DEVICES": "0" } },
-      "problemMatcher": []
-    },
     {
       "label": "Play",
       "type": "shell",
@@ -333,6 +318,9 @@
         "--damping_scale", "${input:trampoline_damping_scale}",
         "--poissons_ratio", "${input:trampoline_poissons_ratio}",
         // "--mode", "${input:mode}",
+        "--headless",
+        "--video",
+        "--video_length", "${input:video_length}",
       ],
       "options": { "cwd": "${workspaceFolder}/scripts" },
       "problemMatcher": []

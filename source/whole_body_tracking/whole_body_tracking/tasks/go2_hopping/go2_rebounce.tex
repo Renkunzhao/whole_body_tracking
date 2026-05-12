@@ -1173,6 +1173,86 @@ alone is not sufficient: a policy can survive the full episode while
 under-jumping every apex, so comparisons should always report both stability
 and height-tracking metrics.
 
+\subsection{Current Fixed-Condition Results}
+
+Table~\ref{tab:rebounce-current-summary} summarizes the current fixed-condition
+CSV evaluations. Conditions where all methods behave similarly are omitted from
+the detailed table; the comparison focuses on aggregate tracking quality and on
+stress cases where the policies separate. The teacher is the privileged PPO
+policy. MLP+DR is the deployable feed-forward PPO baseline. History-29200 and
+RNN-28700 are local deployable baselines. Student-H10 is the history-based
+distillation student, while Student-Base-8900 and Student-RNN-8900 are the
+current student checkpoints.
+
+\begin{table}[h]
+\centering
+\scriptsize
+\begin{tabular}{p{0.14\linewidth}rrrrrrrr}
+\hline
+Method &
+Succ. &
+HSucc. &
+MAE &
+$h/h^*$ &
+HSucc.@1.2 &
+MAE@1.2 &
+HSucc.@hard &
+MAE@hard \\
+\hline
+Teacher & 0.999 & 0.977 & 0.010 & 0.993 & 0.932 & 0.016 & 0.797 & 0.033 \\
+Student-Base-8900 & 0.986 & 0.956 & 0.016 & 0.994 & 0.870 & 0.027 & 0.649 & 0.043 \\
+Student-RNN-8900 & 0.892 & 0.754 & 0.051 & 0.970 & 0.509 & 0.114 & 0.178 & 0.188 \\
+Student-H10 & 0.751 & 0.723 & 0.038 & 0.954 & 0.704 & 0.042 & 0.362 & 0.072 \\
+MLP+DR & 0.977 & 0.712 & 0.054 & 0.972 & 0.247 & 0.127 & 0.000 & 0.229 \\
+RNN-28700 & 0.836 & 0.681 & 0.110 & 0.912 & 0.254 & 0.281 & 0.000 & 0.644 \\
+History-29200 & 0.962 & 0.745 & 0.114 & 0.922 & 0.296 & 0.308 & 0.000 & 0.660 \\
+\hline
+\end{tabular}
+\caption{Current fixed-condition rebounce evaluation summary. Succ. is
+episode success rate, HSucc. is strict apex-height success rate, and MAE is the
+mean absolute apex-height error in meters. The 1.2 columns average only the
+$1.2$ m target-height conditions. The hard columns average the $1.2$ m target
+with damping $0.1$ across trampoline stiffnesses.}
+\label{tab:rebounce-current-summary}
+\end{table}
+
+The aggregate results show that the teacher remains the strongest policy.
+Student-Base-8900 is the closest deployable policy: it nearly matches the
+teacher on low and medium targets, but still loses accuracy and contact
+robustness on the high-target, high-damping cases. MLP+DR is stable but
+under-jumps the high target. The recurrent policies and History-29200 mainly
+fail by under-jumping when $h^*=1.2$ m, especially at high damping.
+
+\begin{table}[h]
+\centering
+\scriptsize
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{p{0.17\linewidth}rrrrrp{0.18\linewidth}}
+\hline
+Method &
+HS@hi &
+MAE &
+Bias &
+S@lo &
+HS@lo &
+Issue \\
+\hline
+Teacher & 0.797 & 0.033 & -0.033 & 1.000 & 1.000 & mild high-target under-jump \\
+Student-Base-8900 & 0.649 & 0.043 & -0.043 & 1.000 & 0.999 & high-damping non-foot contacts \\
+Student-RNN-8900 & 0.178 & 0.188 & -0.188 & 0.864 & 0.833 & high-target under-jump and falls \\
+Student-H10 & 0.362 & 0.072 & -0.072 & 0.141 & 0.443 & low-target timeout failures \\
+MLP+DR & 0.000 & 0.229 & -0.229 & 1.000 & 0.985 & stable but under-jumps high target \\
+RNN-28700 & 0.000 & 0.644 & -0.644 & 0.974 & 0.942 & severe high-target under-jump \\
+History-29200 & 0.000 & 0.660 & -0.660 & 1.000 & 0.997 & severe high-target under-jump \\
+\hline
+\end{tabular}
+\caption{Diagnostic stress-condition summary. HS@hi, MAE, and Bias average the
+$h^*=1.2$ m, damping $0.1$ conditions across stiffnesses. S@lo and HS@lo average
+the $h^*=0.5$ m, damping $0.1$ conditions across stiffnesses. Bias is signed
+apex-height error in meters.}
+\label{tab:rebounce-current-selected}
+\end{table}
+
 \subsection{TODO: Real-Robot Observation Noise Measurement}
 
 Before finalizing sim-to-real observation corruption, measure the observation

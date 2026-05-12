@@ -22,11 +22,16 @@ parser.add_argument("--dynamic_friction", type=float, default=None, help="Fix tr
 parser.add_argument("--elasticity_damping", type=float, default=None, help="Fix trampoline elasticity damping during play.")
 parser.add_argument("--damping_scale", type=float, default=None, help="Fix trampoline damping scale during play.")
 parser.add_argument("--poissons_ratio", type=float, default=None, help="Fix trampoline Poisson's ratio during play.")
+parser.add_argument("--video", action="store_true", default=False, help="Record a real-time video of the play loop.")
+parser.add_argument("--video_length", type=int, default=500, help="Length of the recorded video (in env steps).")
 # append RSL-RL cli arguments
 cli_args.add_rsl_rl_args(parser)
 # append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
 args_cli, hydra_args = parser.parse_known_args()
+# offscreen camera is required for video capture; safe to enable alongside GUI
+if args_cli.video:
+    args_cli.enable_cameras = True
 
 # clear out sys.argv for Hydra
 sys.argv = [sys.argv[0]] + hydra_args
@@ -181,6 +186,36 @@ def _set_fixed_play_condition(env_cfg):
     return env_cfg
 
 
+def _run_id_for_video(wandb_path: str | None, resume_path: str) -> str:
+    if wandb_path:
+        segments = [segment for segment in wandb_path.split("/") if segment]
+        if segments and "model" in segments[-1]:
+            segments = segments[:-1]
+        if segments:
+            return segments[-1]
+    # local --load_run: use the run folder name (parent of the checkpoint file)
+    return os.path.basename(os.path.dirname(os.path.abspath(resume_path))) or "local"
+
+
+def _video_name_prefix(args, run_id: str) -> str:
+    parts = [f"run-{run_id}"]
+    keys = [
+        ("target_height", "h", ".2f"),
+        ("youngs_modulus", "E", ".1e"),
+        ("trampoline_mass", "m", ".1f"),
+        ("dynamic_friction", "mu", ".2f"),
+        ("elasticity_damping", "damp", ".3f"),
+        ("damping_scale", "ds", ".2f"),
+        ("poissons_ratio", "nu", ".2f"),
+    ]
+    for attr, label, fmt in keys:
+        value = getattr(args, attr, None)
+        if value is None:
+            continue
+        parts.append(f"{label}{format(float(value), fmt)}")
+    return "_".join(parts)
+
+
 def _download_checkpoint_from_wandb(wandb_path: str) -> str:
     import wandb
 
@@ -317,6 +352,9 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     # Align with mjlab: play mode is chosen by this entry script, while env-specific overrides live on the config.
     env_cfg = apply_play_overrides(env_cfg)
     env_cfg = _set_fixed_play_condition(env_cfg)
+    env_cfg.terminations = None
+    if hasattr(env_cfg.rewards, "failed_termination"):
+        env_cfg.rewards.failed_termination = None
     env_cfg.scene.num_envs = 1
 
     if args_cli.wandb_path:
@@ -328,7 +366,31 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         print(f"[INFO]: Loading model checkpoint from: {resume_path}")
 
     # create isaac environment
-    env = gym.make(args_cli.task, cfg=env_cfg)
+    env = gym.make(
+        args_cli.task,
+        cfg=env_cfg,
+        render_mode="rgb_array" if args_cli.video else None,
+    )
+
+    # wrap with RecordVideo on the raw gym env, before RL-specific wrappers
+    if args_cli.video:
+        video_folder = os.path.join(os.path.dirname(resume_path), "videos", "play-rebounce")
+        run_id = _run_id_for_video(args_cli.wandb_path, resume_path)
+        name_prefix = _video_name_prefix(args_cli, run_id)
+        video_kwargs = {
+            "video_folder": video_folder,
+            "step_trigger": lambda step: step == 0,
+            "video_length": args_cli.video_length,
+            "name_prefix": name_prefix,
+            "disable_logger": True,
+        }
+        step_dt_estimate = float(env_cfg.sim.dt) * int(env_cfg.decimation)
+        print(
+            f"[INFO]: Recording video -> {video_folder}/{name_prefix}-step-0.mp4 "
+            f"({args_cli.video_length} steps = {args_cli.video_length * step_dt_estimate:.2f}s).",
+            flush=True,
+        )
+        env = gym.wrappers.RecordVideo(env, **video_kwargs)
 
     # convert to single-agent instance if required by the RL algorithm
     if isinstance(env.unwrapped, DirectMARLEnv):
@@ -358,59 +420,68 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     episode_count = 0
     episode_stats = EpisodeStats(env, energy_command)
     dob_sensor = DobContactSensor(env)
+    video_step_count = 0
 
     # simulate environment
-    while simulation_app.is_running():
-        episode_stats.update_state(env)
-        # run policy inference without putting mutable environment buffers into inference mode
-        with torch.inference_mode():
-            actions = policy(obs)
-        obs, _, dones, _ = env.step(actions)
-        dob_sensor.update()
+    try:
+        while simulation_app.is_running():
+            episode_stats.update_state(env)
+            # run policy inference without putting mutable environment buffers into inference mode
+            with torch.inference_mode():
+                actions = policy(obs)
+            obs, _, dones, _ = env.step(actions)
+            dob_sensor.update()
 
-        if hop_command is not None and bool(hop_command.is_apex[0]):
-            apex_count += 1
-            apex_height = float(hop_command.last_apex_height[0])
-            target_height = float(hop_command.last_apex_target_height[0])
-            drop_height = float(hop_command.drop_height[0])
-            error = apex_height - target_height
-            episode_stats.record_apex(hop_command)
-            energy_text = ""
-            if energy_command is not None:
-                positive_work_per_height = float(energy_command.work_per_height_pulse("positive")[0])
-                absolute_work_per_height = float(energy_command.work_per_height_pulse("absolute")[0])
-                energy_text = f" pos/h={positive_work_per_height:.1f} abs/h={absolute_work_per_height:.1f} J/m"
-            dob_metrics = dob_sensor.consume_hop_metrics(0, target_height)
-            energy_text += (
-                f" dob+={dob_metrics['positive_work_per_height']:.1f} "
-                f"dob-={dob_metrics['negative_work_per_height']:.1f} "
-                f"dobR={dob_metrics['return_ratio']:.2f} "
-                f"dobFz={dob_metrics['peak_total_force_z']:.0f}N"
-            )
-            print(
-                f"[A{apex_count:03d}] h={apex_height:.3f}/{target_height:.3f} "
-                f"e={error:+.3f} d={drop_height:.3f}{energy_text}",
-                flush=True,
-            )
+            if hop_command is not None and bool(hop_command.is_apex[0]):
+                apex_count += 1
+                apex_height = float(hop_command.last_apex_height[0])
+                target_height = float(hop_command.last_apex_target_height[0])
+                drop_height = float(hop_command.drop_height[0])
+                error = apex_height - target_height
+                episode_stats.record_apex(hop_command)
+                energy_text = ""
+                if energy_command is not None:
+                    positive_work_per_height = float(energy_command.work_per_height_pulse("positive")[0])
+                    absolute_work_per_height = float(energy_command.work_per_height_pulse("absolute")[0])
+                    energy_text = f" pos/h={positive_work_per_height:.1f} abs/h={absolute_work_per_height:.1f} J/m"
+                dob_metrics = dob_sensor.consume_hop_metrics(0, target_height)
+                energy_text += (
+                    f" dob+={dob_metrics['positive_work_per_height']:.1f} "
+                    f"dob-={dob_metrics['negative_work_per_height']:.1f} "
+                    f"dobR={dob_metrics['return_ratio']:.2f} "
+                    f"dobFz={dob_metrics['peak_total_force_z']:.0f}N"
+                )
+                print(
+                    f"[A{apex_count:03d}] h={apex_height:.3f}/{target_height:.3f} "
+                    f"e={error:+.3f} d={drop_height:.3f}{energy_text}",
+                    flush=True,
+                )
 
-        if bool(dones[0]):
-            episode_count += 1
-            _print_episode_summary(episode_count, episode_stats.summary(_get_done_reasons(env)))
-            dob_metrics = dob_sensor.episode_metrics(0)
-            print(
-                f"[DOB{episode_count:03d}] dobW+={dob_metrics['positive_work']:.1f} "
-                f"dobW-={dob_metrics['negative_work']:.1f} dobR={dob_metrics['return_ratio']:.2f} "
-                f"dobFz={dob_metrics['peak_total_force_z']:.0f}N",
-                flush=True,
-            )
-            reset_count += 1
-            apex_count = 0
-            episode_stats.reset(env)
-            dob_sensor.reset()
-            _print_trampoline_params(env, reset_count)
+            if bool(dones[0]):
+                episode_count += 1
+                _print_episode_summary(episode_count, episode_stats.summary(_get_done_reasons(env)))
+                dob_metrics = dob_sensor.episode_metrics(0)
+                print(
+                    f"[DOB{episode_count:03d}] dobW+={dob_metrics['positive_work']:.1f} "
+                    f"dobW-={dob_metrics['negative_work']:.1f} dobR={dob_metrics['return_ratio']:.2f} "
+                    f"dobFz={dob_metrics['peak_total_force_z']:.0f}N",
+                    flush=True,
+                )
+                reset_count += 1
+                apex_count = 0
+                episode_stats.reset(env)
+                dob_sensor.reset()
+                _print_trampoline_params(env, reset_count)
 
-    # close the simulator
-    env.close()
+            if args_cli.video:
+                video_step_count += 1
+                if video_step_count >= args_cli.video_length:
+                    print(f"[INFO]: Video recording complete after {video_step_count} steps. Exiting.", flush=True)
+                    break
+    except KeyboardInterrupt:
+        print("[INFO]: Interrupted by user. Finalizing video (if recording) before exit...", flush=True)
+    finally:
+        env.close()
 
 
 if __name__ == "__main__":
