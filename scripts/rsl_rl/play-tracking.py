@@ -49,7 +49,11 @@ from isaaclab_tasks.utils.hydra import hydra_task_config
 # Import extensions to set up environment tasks
 import whole_body_tracking.tasks  # noqa: F401
 from isaaclab_rl.rsl_rl import export_policy_as_onnx
-from whole_body_tracking.utils.exporter import attach_onnx_metadata, export_motion_policy_as_onnx
+from whole_body_tracking.utils.exporter import (
+    attach_onnx_metadata,
+    export_motion_policy_as_onnx,
+    get_policy_export_normalizer,
+)
 from whole_body_tracking.utils.task_utils import apply_play_overrides, env_cfg_requires_motion
 
 class _JumpTracker:
@@ -217,12 +221,14 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             env.unwrapped,
             ppo_runner.alg.policy,
             path=export_model_dir,
+            normalizer=get_policy_export_normalizer(ppo_runner.alg.policy),
             filename="policy.onnx",
         )
     else:
         export_policy_as_onnx(
             ppo_runner.alg.policy,
             path=export_model_dir,
+            normalizer=get_policy_export_normalizer(ppo_runner.alg.policy),
             filename="policy.onnx",
         )
     attach_onnx_metadata(env.unwrapped, args_cli.wandb_path if args_cli.wandb_path else "none", export_model_dir)

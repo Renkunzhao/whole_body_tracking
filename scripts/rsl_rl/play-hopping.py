@@ -32,6 +32,7 @@ simulation_app = app_launcher.app
 """Rest everything follows."""
 
 import gymnasium as gym
+import os
 import torch
 
 from rsl_rl.runners import OnPolicyRunner
@@ -43,11 +44,12 @@ from isaaclab.envs import (
     ManagerBasedRLEnvCfg,
     multi_agent_to_single_agent,
 )
-from isaaclab_rl.rsl_rl import RslRlOnPolicyRunnerCfg, RslRlVecEnvWrapper
+from isaaclab_rl.rsl_rl import RslRlOnPolicyRunnerCfg, RslRlVecEnvWrapper, export_policy_as_onnx
 from isaaclab_tasks.utils.hydra import hydra_task_config
 
 # Import extensions to set up environment tasks
 import whole_body_tracking.tasks  # noqa: F401
+from whole_body_tracking.utils.exporter import attach_onnx_metadata, get_policy_export_normalizer
 from whole_body_tracking.utils.task_utils import apply_play_overrides
 
 
@@ -144,6 +146,16 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
     # obtain the trained policy for inference
     policy = ppo_runner.get_inference_policy(device=env.unwrapped.device)
+
+    # export policy to ONNX with the same observation normalizer used by inference
+    export_model_dir = os.path.join(os.path.dirname(resume_path), "exported")
+    export_policy_as_onnx(
+        ppo_runner.alg.policy,
+        path=export_model_dir,
+        normalizer=get_policy_export_normalizer(ppo_runner.alg.policy),
+        filename="policy.onnx",
+    )
+    attach_onnx_metadata(env.unwrapped, args_cli.wandb_path, export_model_dir)
 
     # reset environment
     if args_cli.mode == "apex":

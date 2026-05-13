@@ -65,7 +65,7 @@ class Go2HoppingDistillationRunnerCfg(RslRlDistillationRunnerCfg):
     policy = RslRlDistillationStudentTeacherCfg(
         init_noise_std=0.1,
         student_obs_normalization=True,
-        teacher_obs_normalization=False,
+        teacher_obs_normalization=True,
         student_hidden_dims=[512, 256, 128],
         teacher_hidden_dims=[512, 256, 128],
         activation="elu",
@@ -85,7 +85,7 @@ class Go2HoppingRecurrentDistillationRunnerCfg(Go2HoppingDistillationRunnerCfg):
     policy = RslRlDistillationStudentTeacherRecurrentCfg(
         init_noise_std=0.1,
         student_obs_normalization=True,
-        teacher_obs_normalization=False,
+        teacher_obs_normalization=True,
         student_hidden_dims=[512, 256, 128],
         teacher_hidden_dims=[512, 256, 128],
         activation="elu",

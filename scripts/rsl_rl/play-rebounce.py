@@ -63,13 +63,14 @@ from isaaclab.envs import (
     multi_agent_to_single_agent,
 )
 from isaaclab.utils.math import euler_xyz_from_quat
-from isaaclab_rl.rsl_rl import RslRlOnPolicyRunnerCfg, RslRlVecEnvWrapper
+from isaaclab_rl.rsl_rl import RslRlOnPolicyRunnerCfg, RslRlVecEnvWrapper, export_policy_as_onnx
 from isaaclab_tasks.utils import get_checkpoint_path
 from isaaclab_tasks.utils.hydra import hydra_task_config
 
 # Import extensions to set up environment tasks
 import whole_body_tracking.tasks  # noqa: F401
 from whole_body_tracking.sensors import DobContactSensor
+from whole_body_tracking.utils.exporter import attach_onnx_metadata, get_policy_export_normalizer
 from whole_body_tracking.utils.task_utils import apply_play_overrides
 
 
@@ -501,6 +502,16 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
     # obtain the trained policy for inference
     policy = ppo_runner.get_inference_policy(device=env.unwrapped.device)
+
+    # export policy to ONNX with the same observation normalizer used by inference
+    export_model_dir = os.path.join(os.path.dirname(resume_path), "exported")
+    export_policy_as_onnx(
+        ppo_runner.alg.policy,
+        path=export_model_dir,
+        normalizer=get_policy_export_normalizer(ppo_runner.alg.policy),
+        filename="policy.onnx",
+    )
+    attach_onnx_metadata(env.unwrapped, args_cli.wandb_path if args_cli.wandb_path else "none", export_model_dir)
 
     obs, _ = env.reset()
     hop_command, energy_command = _get_rebounce_debug_handles(env)

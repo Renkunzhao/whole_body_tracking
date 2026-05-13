@@ -50,8 +50,6 @@ import os
 import pathlib
 import torch
 from datetime import datetime
-from rsl_rl.runners import DistillationRunner
-
 from isaaclab.envs import (
     DirectMARLEnv,
     DirectMARLEnvCfg,
@@ -69,7 +67,7 @@ from isaaclab_tasks.utils.hydra import hydra_task_config
 
 # Import extensions to set up environment tasks
 import whole_body_tracking.tasks  # noqa: F401
-from whole_body_tracking.utils.my_on_policy_runner import MotionOnPolicyRunner, MyOnPolicyRunner
+from whole_body_tracking.utils.my_on_policy_runner import MotionOnPolicyRunner, MyDistillationRunner, MyOnPolicyRunner
 from whole_body_tracking.utils.task_utils import env_cfg_requires_motion
 
 
@@ -233,7 +231,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     # create runner from rsl-rl
     runner_class_name = getattr(agent_cfg, "class_name", "OnPolicyRunner")
     if runner_class_name == "DistillationRunner":
-        runner = DistillationRunner(env, agent_cfg.to_dict(), log_dir=log_dir, device=agent_cfg.device)
+        runner = MyDistillationRunner(env, agent_cfg.to_dict(), log_dir=log_dir, device=agent_cfg.device)
     elif requires_motion:
         runner = MotionOnPolicyRunner(
             env, agent_cfg.to_dict(), log_dir=log_dir, device=agent_cfg.device, registry_name=registry_name

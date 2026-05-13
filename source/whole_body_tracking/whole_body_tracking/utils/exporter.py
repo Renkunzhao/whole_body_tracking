@@ -14,6 +14,15 @@ from isaaclab_rl.rsl_rl.exporter import _OnnxPolicyExporter
 from whole_body_tracking.tasks.tracking.mdp import MotionCommand
 
 
+def get_policy_export_normalizer(policy: object) -> object | None:
+    """Return the observation normalizer that belongs in the deployed policy graph."""
+    if hasattr(policy, "student_obs_normalizer"):
+        return policy.student_obs_normalizer
+    if hasattr(policy, "actor_obs_normalizer"):
+        return policy.actor_obs_normalizer
+    return None
+
+
 def export_motion_policy_as_onnx(
     env: ManagerBasedRLEnv,
     actor_critic: object,
