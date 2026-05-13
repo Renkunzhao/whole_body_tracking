@@ -134,8 +134,15 @@ class CommandsCfg:
         asset_cfg=SceneEntityCfg("robot"),
         foot_asset_cfg=SceneEntityCfg("robot", body_names=list(GO2_FOOT_BODY_NAMES)),
         foot_clearance=0.08,
+        flight_start_clearance=0.02,
         surface_z=0.0,
         apex_height_tolerance=0.05,
+        joint_velocity_asset_cfg=SceneEntityCfg("robot", joint_names=[".*"]),
+        joint_velocity_deadbands={
+            ".*_hip_joint": 3.2,
+            ".*_thigh_joint": 4.5,
+            ".*_calf_joint": 3.0,
+        },
         # Initial target is sampled by the reset event so it can be decoupled
         # from the initial drop height. During a 20 s rollout, resample the
         # target at most about once to test command adaptation.
@@ -399,6 +406,23 @@ class RewardsCfg:
         params={
             "command_name": "energy",
             "mode": "absolute",
+        },
+    )
+    flight_excess_joint_vel = RewTerm(
+        func=mdp.rebounce_flight_excess_joint_velocity_penalty,
+        weight=-2.0,
+        params={
+            "command_name": "hop",
+        },
+    )
+    left_right_joint_symmetry = RewTerm(
+        func=mdp.go2_left_right_joint_symmetry_l2,
+        weight=-0.05,
+        params={
+            "asset_cfg": SceneEntityCfg("robot"),
+            "hip_std": 0.25,
+            "thigh_std": 0.35,
+            "calf_std": 0.35,
         },
     )
     flat_orientation = RewTerm(func=mdp.flat_orientation_l2, weight=-2.0)

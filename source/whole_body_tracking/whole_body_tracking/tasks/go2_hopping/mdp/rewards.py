@@ -203,6 +203,91 @@ def joint_mechanical_energy_penalty(
     return energy_cmd.work_per_target_height_pulse(mode)
 
 
+def rebounce_flight_excess_joint_velocity_penalty(
+    env: ManagerBasedRLEnv,
+    command_name: str,
+) -> torch.Tensor:
+    """Sparse penalty for mean joint velocity above deadbands from takeoff to apex.
+
+    The rebounce command owns the flight window and emits a one-step pulse at
+    each valid apex. The value is averaged over the upward flight samples, so
+    longer flight is not automatically penalized more heavily.
+    """
+    cmd = env.command_manager.get_term(command_name)
+    return cmd.flight_excess_joint_vel_pulse
+
+
+class go2_left_right_joint_symmetry_l2(ManagerTermBase):
+    """Dense all-time penalty for Go2 left/right leg asymmetry.
+
+    Front and rear leg pairs are handled independently. Hip joints are mirrored
+    left/right, while thigh and calf joints should move in the same direction.
+    Errors are measured relative to the default joint pose so the nominal
+    left/right hip offsets remain valid.
+    """
+
+    _JOINT_NAMES = (
+        "FL_hip_joint",
+        "FR_hip_joint",
+        "FL_thigh_joint",
+        "FR_thigh_joint",
+        "FL_calf_joint",
+        "FR_calf_joint",
+        "RL_hip_joint",
+        "RR_hip_joint",
+        "RL_thigh_joint",
+        "RR_thigh_joint",
+        "RL_calf_joint",
+        "RR_calf_joint",
+    )
+
+    def __init__(self, cfg: RewardTermCfg, env: ManagerBasedRLEnv):
+        super().__init__(cfg, env)
+        asset_cfg: SceneEntityCfg = cfg.params.get("asset_cfg", SceneEntityCfg("robot"))
+        asset: Articulation = env.scene[asset_cfg.name]
+        joint_ids, joint_names = asset.find_joints(self._JOINT_NAMES, preserve_order=True)
+        if tuple(joint_names) != self._JOINT_NAMES:
+            raise RuntimeError(f"Go2 symmetry joint order mismatch: expected {self._JOINT_NAMES}, got {joint_names}.")
+        self._asset_name = asset_cfg.name
+        self._joint_ids = joint_ids
+        self._std = torch.tensor(
+            (
+                cfg.params["hip_std"],
+                cfg.params["thigh_std"],
+                cfg.params["calf_std"],
+                cfg.params["hip_std"],
+                cfg.params["thigh_std"],
+                cfg.params["calf_std"],
+            ),
+            device=env.device,
+            dtype=torch.float32,
+        )
+
+    def __call__(
+        self,
+        env: ManagerBasedRLEnv,
+        hip_std: float,
+        thigh_std: float,
+        calf_std: float,
+        asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+    ) -> torch.Tensor:
+        del hip_std, thigh_std, calf_std, asset_cfg  # resolved in __init__
+        asset: Articulation = env.scene[self._asset_name]
+        q = asset.data.joint_pos[:, self._joint_ids] - asset.data.default_joint_pos[:, self._joint_ids]
+        errors = torch.stack(
+            (
+                q[:, 0] + q[:, 1],  # FL/FR hip mirror
+                q[:, 2] - q[:, 3],  # FL/FR thigh same direction
+                q[:, 4] - q[:, 5],  # FL/FR calf same direction
+                q[:, 6] + q[:, 7],  # RL/RR hip mirror
+                q[:, 8] - q[:, 9],  # RL/RR thigh same direction
+                q[:, 10] - q[:, 11],  # RL/RR calf same direction
+            ),
+            dim=1,
+        )
+        return torch.mean(torch.square(errors / self._std.unsqueeze(0)), dim=1)
+
+
 class termination_term(ManagerTermBase):
     """Reward/penalty pulse for selected termination terms, including timeouts."""
 

@@ -3,6 +3,7 @@
 """Launch Isaac Sim Simulator first."""
 
 import argparse
+import csv
 import math
 import sys
 
@@ -24,6 +25,12 @@ parser.add_argument("--damping_scale", type=float, default=None, help="Fix tramp
 parser.add_argument("--poissons_ratio", type=float, default=None, help="Fix trampoline Poisson's ratio during play.")
 parser.add_argument("--video", action="store_true", default=False, help="Record a real-time video of the play loop.")
 parser.add_argument("--video_length", type=int, default=500, help="Length of the recorded video (in env steps).")
+parser.add_argument(
+    "--no_joint_vel_csv",
+    action="store_true",
+    default=False,
+    help="Disable the default per-step joint velocity CSV log.",
+)
 # append RSL-RL cli arguments
 cli_args.add_rsl_rl_args(parser)
 # append AppLauncher cli args
@@ -133,6 +140,83 @@ def _print_trampoline_params(env, reset_count: int):
     print(f"[TRAMP R{reset_count:03d}] " + " ".join(parts), flush=True)
 
 
+class JointVelocityCsvLogger:
+    """Temporary play logger for choosing joint-velocity deadbands."""
+
+    def __init__(self, env, hop_command, csv_path: str):
+        self.env = env
+        self.hop_command = hop_command
+        self.robot = env.unwrapped.scene["robot"]
+        self.csv_path = os.path.abspath(os.path.expanduser(csv_path))
+        os.makedirs(os.path.dirname(self.csv_path), exist_ok=True)
+        self._file = open(self.csv_path, "w", newline="")
+        self._writer = csv.writer(self._file)
+        self._write_header()
+        print(f"[INFO]: Logging joint velocities to {self.csv_path}", flush=True)
+
+    def _write_header(self):
+        header = [
+            "global_step",
+            "episode",
+            "episode_step",
+            "sim_time_s",
+            "is_air",
+            "feet_below_clearance",
+            "is_apex",
+            "root_z",
+            "root_vz",
+            "min_foot_z",
+            "max_foot_z",
+        ]
+        header.extend(f"joint_vel/{name}" for name in self.robot.joint_names)
+        self._writer.writerow(header)
+
+    def _air_flags(self) -> tuple[int | float, int | float]:
+        if self.hop_command is None or not hasattr(self.hop_command, "_feet_clearance_flags"):
+            return float("nan"), float("nan")
+        feet_above_clearance, feet_below_clearance = self.hop_command._feet_clearance_flags()
+        return int(bool(feet_above_clearance[0].item())), int(bool(feet_below_clearance[0].item()))
+
+    def _foot_z_range(self) -> tuple[float, float]:
+        foot_asset = getattr(self.hop_command, "_foot_asset", None) if self.hop_command is not None else None
+        foot_body_ids = getattr(self.hop_command, "_foot_body_ids", None) if self.hop_command is not None else None
+        if foot_asset is None or foot_body_ids is None:
+            return float("nan"), float("nan")
+        foot_z_local = foot_asset.data.body_pos_w[0, foot_body_ids, 2] - self.env.unwrapped.scene.env_origins[0, 2]
+        return float(torch.min(foot_z_local).item()), float(torch.max(foot_z_local).item())
+
+    def record(self, global_step: int, episode: int, sim_time_s: float):
+        is_air, feet_below_clearance = self._air_flags()
+        min_foot_z, max_foot_z = self._foot_z_range()
+        episode_step = int(self.env.unwrapped.episode_length_buf[0].item())
+        root_z = float(self.robot.data.root_pos_w[0, 2].item())
+        root_vz = float(self.robot.data.root_lin_vel_w[0, 2].item())
+        is_apex = int(bool(self.hop_command is not None and self.hop_command.is_apex[0].item()))
+        joint_vel = self.robot.data.joint_vel[0].detach().cpu().tolist()
+        self._writer.writerow(
+            [
+                global_step,
+                episode,
+                episode_step,
+                f"{sim_time_s:.6f}",
+                is_air,
+                feet_below_clearance,
+                is_apex,
+                f"{root_z:.6f}",
+                f"{root_vz:.6f}",
+                f"{min_foot_z:.6f}",
+                f"{max_foot_z:.6f}",
+                *[f"{value:.6f}" for value in joint_vel],
+            ]
+        )
+        if global_step % 100 == 0:
+            self._file.flush()
+
+    def close(self):
+        self._file.flush()
+        self._file.close()
+
+
 def _get_done_reasons(env, env_id: int = 0) -> list[str]:
     termination_manager = getattr(env.unwrapped, "termination_manager", None)
     if termination_manager is None:
@@ -214,6 +298,11 @@ def _video_name_prefix(args, run_id: str) -> str:
             continue
         parts.append(f"{label}{format(float(value), fmt)}")
     return "_".join(parts)
+
+
+def _joint_vel_csv_path(resume_path: str, name_prefix: str) -> str:
+    folder = os.path.join(os.path.dirname(resume_path), "joint_vel", "play-rebounce")
+    return os.path.join(folder, f"{name_prefix}-step-0_joint_vel.csv")
 
 
 def _download_checkpoint_from_wandb(wandb_path: str) -> str:
@@ -365,6 +454,9 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         resume_path = get_checkpoint_path(log_root_path, agent_cfg.load_run, agent_cfg.load_checkpoint)
         print(f"[INFO]: Loading model checkpoint from: {resume_path}")
 
+    run_id = _run_id_for_video(args_cli.wandb_path, resume_path)
+    name_prefix = _video_name_prefix(args_cli, run_id)
+
     # create isaac environment
     env = gym.make(
         args_cli.task,
@@ -375,8 +467,6 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     # wrap with RecordVideo on the raw gym env, before RL-specific wrappers
     if args_cli.video:
         video_folder = os.path.join(os.path.dirname(resume_path), "videos", "play-rebounce")
-        run_id = _run_id_for_video(args_cli.wandb_path, resume_path)
-        name_prefix = _video_name_prefix(args_cli, run_id)
         video_kwargs = {
             "video_folder": video_folder,
             "step_trigger": lambda step: step == 0,
@@ -420,6 +510,10 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     episode_count = 0
     episode_stats = EpisodeStats(env, energy_command)
     dob_sensor = DobContactSensor(env)
+    joint_vel_csv_path = _joint_vel_csv_path(resume_path, name_prefix)
+    joint_vel_logger = None if args_cli.no_joint_vel_csv else JointVelocityCsvLogger(env, hop_command, joint_vel_csv_path)
+    play_step_count = 0
+    sim_step_dt = float(env.unwrapped.step_dt)
     video_step_count = 0
 
     # simulate environment
@@ -430,6 +524,9 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             with torch.inference_mode():
                 actions = policy(obs)
             obs, _, dones, _ = env.step(actions)
+            play_step_count += 1
+            if joint_vel_logger is not None:
+                joint_vel_logger.record(play_step_count, episode_count, play_step_count * sim_step_dt)
             dob_sensor.update()
 
             if hop_command is not None and bool(hop_command.is_apex[0]):
@@ -481,6 +578,8 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     except KeyboardInterrupt:
         print("[INFO]: Interrupted by user. Finalizing video (if recording) before exit...", flush=True)
     finally:
+        if joint_vel_logger is not None:
+            joint_vel_logger.close()
         env.close()
 
 

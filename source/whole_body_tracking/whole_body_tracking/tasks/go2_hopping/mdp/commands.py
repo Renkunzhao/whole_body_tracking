@@ -9,6 +9,7 @@ from isaaclab.assets import Articulation
 from isaaclab.managers import CommandTerm, CommandTermCfg, SceneEntityCfg
 from isaaclab.sensors import ContactSensor
 from isaaclab.utils import configclass
+from isaaclab.utils.string import resolve_matching_names_values
 
 from whole_body_tracking.sensors import get_or_create_dob_contact_sensor
 
@@ -276,6 +277,15 @@ class UniformRebounceCommand(CommandTerm):
     def __init__(self, cfg: UniformRebounceCommandCfg, env: ManagerBasedRLEnv):
         super().__init__(cfg, env)
         self.robot: Articulation = env.scene[cfg.asset_cfg.name]
+        cfg.joint_velocity_asset_cfg.resolve(env.scene)
+        self._joint_velocity_asset: Articulation = env.scene[cfg.joint_velocity_asset_cfg.name]
+        self._joint_velocity_ids = cfg.joint_velocity_asset_cfg.joint_ids
+        if isinstance(self._joint_velocity_ids, slice):
+            joint_names = self._joint_velocity_asset.joint_names[self._joint_velocity_ids]
+        else:
+            joint_names = [self._joint_velocity_asset.joint_names[i] for i in self._joint_velocity_ids]
+        _, _, deadband_values = resolve_matching_names_values(cfg.joint_velocity_deadbands, joint_names)
+        self._joint_velocity_deadbands = torch.tensor(deadband_values, device=env.device, dtype=torch.float32)
         self._foot_asset = None
         self._foot_body_ids = None
         if cfg.foot_asset_cfg is not None:
@@ -292,9 +302,15 @@ class UniformRebounceCommand(CommandTerm):
         self._prev_vz = torch.zeros(n, device=dev)
         self._apex_count = torch.zeros(n, device=dev)
         self._height_matched_apex_count = torch.zeros(n, device=dev)
+        self._flight_excess_joint_vel_sum = torch.zeros(n, device=dev)
+        self._flight_excess_joint_vel_count = torch.zeros(n, device=dev)
+        self._flight_excess_joint_vel_pulse = torch.zeros(n, device=dev)
+        self._last_flight_excess_joint_vel = torch.zeros(n, device=dev)
+        self._mean_flight_excess_joint_vel = torch.zeros(n, device=dev)
         self.metrics["error_peak_height"] = torch.zeros(n, device=dev)
         self.metrics["apex_count"] = torch.zeros(n, device=dev)
         self.metrics["height_matched_apex_count"] = torch.zeros(n, device=dev)
+        self.metrics["flight_excess_joint_vel"] = torch.zeros(n, device=dev)
 
     @property
     def command(self) -> torch.Tensor:
@@ -320,14 +336,22 @@ class UniformRebounceCommand(CommandTerm):
     def last_apex_target_height(self) -> torch.Tensor:
         return self._last_apex_target_height
 
-    def _feet_clearance_flags(self) -> tuple[torch.Tensor, torch.Tensor]:
+    @property
+    def flight_excess_joint_vel_pulse(self) -> torch.Tensor:
+        return self._flight_excess_joint_vel_pulse
+
+    @property
+    def last_flight_excess_joint_vel(self) -> torch.Tensor:
+        return self._last_flight_excess_joint_vel
+
+    def _feet_clearance_flags(self, clearance: float | None = None) -> tuple[torch.Tensor, torch.Tensor]:
         ones = torch.ones(self.num_envs, dtype=torch.bool, device=self.device)
         if self._foot_asset is None or self._foot_body_ids is None:
             return ones, ones
         foot_z_local = self._foot_asset.data.body_pos_w[:, self._foot_body_ids, 2] - self._env.scene.env_origins[:, 2:3]
         min_foot_z = torch.min(foot_z_local, dim=1).values
         max_foot_z = torch.max(foot_z_local, dim=1).values
-        threshold = self.cfg.surface_z + self.cfg.foot_clearance
+        threshold = self.cfg.surface_z + (self.cfg.foot_clearance if clearance is None else clearance)
         return min_foot_z > threshold, max_foot_z <= threshold
 
     def _height_matched_apex(self, is_apex: torch.Tensor, height: torch.Tensor) -> torch.Tensor:
@@ -341,13 +365,43 @@ class UniformRebounceCommand(CommandTerm):
         # feet return below clearance -> arm -> upward-to-non-upward velocity
         # crossing with feet above clearance -> valid apex pulse -> disarm.
         feet_above_clearance, feet_below_clearance = self._feet_clearance_flags()
+        feet_above_flight_start, feet_below_flight_start = self._feet_clearance_flags(self.cfg.flight_start_clearance)
+        zero = torch.zeros_like(self._flight_excess_joint_vel_sum)
+        self._flight_excess_joint_vel_pulse.zero_()
+        self._flight_excess_joint_vel_sum = torch.where(
+            feet_below_flight_start, zero, self._flight_excess_joint_vel_sum
+        )
+        self._flight_excess_joint_vel_count = torch.where(
+            feet_below_flight_start, zero, self._flight_excess_joint_vel_count
+        )
         self._apex_armed = self._apex_armed | feet_below_clearance
+        flight_up = self._apex_armed & feet_above_flight_start & (vz > 0.0)
+        joint_vel = self._joint_velocity_asset.data.joint_vel[:, self._joint_velocity_ids]
+        excess_joint_vel = torch.clamp(torch.abs(joint_vel) - self._joint_velocity_deadbands.unsqueeze(0), min=0.0)
+        step_mean_excess_joint_vel = torch.mean(excess_joint_vel, dim=1)
+        self._flight_excess_joint_vel_sum = torch.where(
+            flight_up,
+            self._flight_excess_joint_vel_sum + step_mean_excess_joint_vel,
+            self._flight_excess_joint_vel_sum,
+        )
+        self._flight_excess_joint_vel_count = torch.where(
+            flight_up,
+            self._flight_excess_joint_vel_count + 1.0,
+            self._flight_excess_joint_vel_count,
+        )
         is_apex = self._apex_armed & (self._prev_vz > 0.0) & (vz <= 0.0) & feet_above_clearance
         height_matched_apex = self._height_matched_apex(is_apex, height)
         self._is_apex = is_apex
         self._last_apex_height = torch.where(is_apex, height, self._last_apex_height)
         self._last_apex_target_height = torch.where(
             is_apex, self.target_apex_height, self._last_apex_target_height
+        )
+        flight_excess_joint_vel = self._flight_excess_joint_vel_sum / self._flight_excess_joint_vel_count.clamp_min(1.0)
+        self._flight_excess_joint_vel_pulse = torch.where(
+            is_apex, flight_excess_joint_vel, self._flight_excess_joint_vel_pulse
+        )
+        self._last_flight_excess_joint_vel = torch.where(
+            is_apex, flight_excess_joint_vel, self._last_flight_excess_joint_vel
         )
 
         apex_error = torch.abs(self._last_apex_height - self._last_apex_target_height)
@@ -364,8 +418,17 @@ class UniformRebounceCommand(CommandTerm):
             self._height_matched_apex_count + 1.0,
             self._height_matched_apex_count,
         )
+        self._mean_flight_excess_joint_vel = torch.where(
+            is_apex,
+            self._mean_flight_excess_joint_vel
+            + (flight_excess_joint_vel - self._mean_flight_excess_joint_vel) / new_apex_count.clamp_min(1.0),
+            self._mean_flight_excess_joint_vel,
+        )
+        self._flight_excess_joint_vel_sum = torch.where(is_apex, zero, self._flight_excess_joint_vel_sum)
+        self._flight_excess_joint_vel_count = torch.where(is_apex, zero, self._flight_excess_joint_vel_count)
         self.metrics["apex_count"][:] = self._apex_count
         self.metrics["height_matched_apex_count"][:] = self._height_matched_apex_count
+        self.metrics["flight_excess_joint_vel"][:] = self._mean_flight_excess_joint_vel
         self._apex_armed = self._apex_armed & ~is_apex
         self._prev_vz = vz.clone()
 
@@ -405,6 +468,11 @@ class UniformRebounceCommand(CommandTerm):
             self._prev_vz.zero_()
             self._apex_count.zero_()
             self._height_matched_apex_count.zero_()
+            self._flight_excess_joint_vel_sum.zero_()
+            self._flight_excess_joint_vel_count.zero_()
+            self._flight_excess_joint_vel_pulse.zero_()
+            self._last_flight_excess_joint_vel.zero_()
+            self._mean_flight_excess_joint_vel.zero_()
         else:
             self._drop_height[env_ids] = height[env_ids]
             self._is_apex[env_ids] = False
@@ -414,6 +482,11 @@ class UniformRebounceCommand(CommandTerm):
             self._prev_vz[env_ids] = 0.0
             self._apex_count[env_ids] = 0.0
             self._height_matched_apex_count[env_ids] = 0.0
+            self._flight_excess_joint_vel_sum[env_ids] = 0.0
+            self._flight_excess_joint_vel_count[env_ids] = 0.0
+            self._flight_excess_joint_vel_pulse[env_ids] = 0.0
+            self._last_flight_excess_joint_vel[env_ids] = 0.0
+            self._mean_flight_excess_joint_vel[env_ids] = 0.0
         return extras
 
 
@@ -425,8 +498,11 @@ class UniformRebounceCommandCfg(CommandTermCfg):
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
     foot_asset_cfg: SceneEntityCfg | None = None
     foot_clearance: float = 0.0
+    flight_start_clearance: float = 0.0
     surface_z: float = 0.0
     apex_height_tolerance: float = 0.05
+    joint_velocity_asset_cfg: SceneEntityCfg = SceneEntityCfg("robot", joint_names=[".*"])
+    joint_velocity_deadbands: dict[str, float] = MISSING
 
     @configclass
     class Ranges:
