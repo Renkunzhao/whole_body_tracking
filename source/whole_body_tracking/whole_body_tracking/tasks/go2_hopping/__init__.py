@@ -40,11 +40,21 @@ gym.register(
 )
 
 gym.register(
-    id="Go2-Rebounce-Trampoline",
+    id="Go2-Rebounce-Trampoline-Baseline",
     entry_point="isaaclab.envs:ManagerBasedRLEnv",
     disable_env_checker=True,
     kwargs={
         "env_cfg_entry_point": go2_rebounce_env_cfg.Go2RebounceTrampolineEnvCfg,
+        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:Go2HoppingPPORunnerCfg",
+    },
+)
+
+gym.register(
+    id="Go2-Rebounce-Trampoline-Baseline-Base",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": go2_rebounce_env_cfg.Go2RebounceTrampolineBaselineBaseEnvCfg,
         "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:Go2HoppingPPORunnerCfg",
     },
 )

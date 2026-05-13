@@ -10,7 +10,8 @@ motor work.
 
 ## Current Setup
 
-- Task id: `Go2-Rebounce-Trampoline`.
+- Task id: `Go2-Rebounce-Trampoline-Baseline`.
+- Base-state PPO ablation id: `Go2-Rebounce-Trampoline-Baseline-Base`.
 - Main config:
   `source/whole_body_tracking/whole_body_tracking/tasks/go2_hopping/go2_rebounce_env_cfg.py`.
 - Episode length: 20 s.

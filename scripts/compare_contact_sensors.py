@@ -7,7 +7,7 @@ the actual rebounce policy trajectory.
 
 Example:
     python scripts/compare_contact_sensors.py --headless \
-        --task Go2-Rebounce-Trampoline \
+        --task Go2-Rebounce-Trampoline-Baseline \
         --load_run RUN_DIR --checkpoint model_5000.pt \
         --num_envs 16 --steps 500
 """
@@ -29,7 +29,7 @@ import cli_args  # isort: skip  # noqa: E402
 
 
 parser = argparse.ArgumentParser(description="Compare DOB contact sensors on an RSL-RL policy rollout.")
-parser.add_argument("--task", type=str, default="Go2-Rebounce-Trampoline", help="Name of the task.")
+parser.add_argument("--task", type=str, default="Go2-Rebounce-Trampoline-Baseline", help="Name of the task.")
 parser.add_argument("--num_envs", type=int, default=2048, help="Number of parallel envs.")
 parser.add_argument("--steps", type=int, default=500, help="Benchmark steps after warmup.")
 parser.add_argument("--warmup", type=int, default=20, help="Warmup steps before measuring sensor differences.")

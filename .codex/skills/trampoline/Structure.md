@@ -45,6 +45,9 @@ This file is the current architecture map for trampoline-related work in
 - The command term is the single owner of apex state.
 - Valid apex detection uses vertical velocity sign change plus foot-clearance
   geometry, not contact sensors.
+- `Go2-Rebounce-Trampoline-Baseline` is the base PPO task.
+- `Go2-Rebounce-Trampoline-Baseline-Base` is the PPO ablation with root pose
+  and base linear velocity added to the actor observation.
 - The base actor observation is deployable and instantaneous: target command,
   projected gravity, base angular velocity, joint state, and previous action.
   `Go2-Rebounce-Trampoline-history` is the separate flattened-history MLP

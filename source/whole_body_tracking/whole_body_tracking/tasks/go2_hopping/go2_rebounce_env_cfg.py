@@ -223,6 +223,20 @@ class HistoryObservationsCfg(ObservationsCfg):
 
 
 @configclass
+class BaseObservationsCfg(ObservationsCfg):
+    """Actor observations augmented with root pose and base linear velocity."""
+
+    @configclass
+    class PolicyCfg(ObservationsCfg.PolicyCfg):
+        base_pos = ObsTerm(func=mdp.root_pos_w)
+        base_quat = ObsTerm(func=mdp.root_quat_w, params={"make_quat_unique": True})
+        base_lin_vel = ObsTerm(func=mdp.base_lin_vel)
+
+    policy: PolicyCfg = PolicyCfg()
+    critic: ObservationsCfg.PrivilegedCfg = ObservationsCfg.PrivilegedCfg()
+
+
+@configclass
 class RecurrentObservationsCfg(ObservationsCfg):
     """Instantaneous deployable observations for recurrent policies."""
 
@@ -605,11 +619,18 @@ class TrampolineEventCfg(EventCfg):
 
 @configclass
 class Go2RebounceTrampolineEnvCfg(Go2RebounceEnvCfg):
-    """Hopping on a deformable trampoline."""
+    """Baseline rebounce task on a deformable trampoline."""
 
     scene: TrampolineSceneCfg = TrampolineSceneCfg(num_envs=2048, env_spacing=4.0, replicate_physics=False)
     actions: TrampolineActionsCfg = TrampolineActionsCfg()
     events: TrampolineEventCfg = TrampolineEventCfg()
+
+
+@configclass
+class Go2RebounceTrampolineBaselineBaseEnvCfg(Go2RebounceTrampolineEnvCfg):
+    """PPO baseline with root pose and base linear velocity in actor observations."""
+
+    observations: BaseObservationsCfg = BaseObservationsCfg()
 
 
 @configclass

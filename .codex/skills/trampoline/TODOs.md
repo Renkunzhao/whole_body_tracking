@@ -18,6 +18,8 @@ This file is the incremental backlog and work log for trampoline-related work in
 
 Current baseline:
 - deformable trampoline with rim pinning;
+- canonical PPO baseline task id `Go2-Rebounce-Trampoline-Baseline`;
+- base-state PPO ablation task id `Go2-Rebounce-Trampoline-Baseline-Base`;
 - independent drop height and target apex height;
 - command-owned valid-apex state machine;
 - deployable instantaneous actor observation without base position or base
