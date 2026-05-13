@@ -408,6 +408,16 @@ class RewardsCfg:
             "orientation_std": 0.35,
         },
     )
+    rebounce_height_cycle_normalized = RewTerm(
+        func=mdp.rebounce_height_tracking_cycle_normalized_exp,
+        weight=0.0,
+        params={
+            "command_name": "hop",
+            "std": 0.10,
+            "orientation_std": 0.35,
+            "cycle_time_max": 2.0,
+        },
+    )
     energy_penalty = RewTerm(
         # func=mdp.joint_mechanical_energy_penalty,
         # weight=-2.5e-2,

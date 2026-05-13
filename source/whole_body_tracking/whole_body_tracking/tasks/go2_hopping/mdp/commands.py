@@ -302,6 +302,10 @@ class UniformRebounceCommand(CommandTerm):
         self._prev_vz = torch.zeros(n, device=dev)
         self._apex_count = torch.zeros(n, device=dev)
         self._height_matched_apex_count = torch.zeros(n, device=dev)
+        self._time_since_last_apex = torch.zeros(n, device=dev)
+        self._apex_cycle_time_pulse = torch.zeros(n, device=dev)
+        self._last_apex_cycle_time = torch.zeros(n, device=dev)
+        self._mean_apex_cycle_time = torch.zeros(n, device=dev)
         self._flight_excess_joint_vel_sum = torch.zeros(n, device=dev)
         self._flight_excess_joint_vel_count = torch.zeros(n, device=dev)
         self._flight_excess_joint_vel_pulse = torch.zeros(n, device=dev)
@@ -310,6 +314,7 @@ class UniformRebounceCommand(CommandTerm):
         self.metrics["error_peak_height"] = torch.zeros(n, device=dev)
         self.metrics["apex_count"] = torch.zeros(n, device=dev)
         self.metrics["height_matched_apex_count"] = torch.zeros(n, device=dev)
+        self.metrics["apex_cycle_time"] = torch.zeros(n, device=dev)
         self.metrics["flight_excess_joint_vel"] = torch.zeros(n, device=dev)
 
     @property
@@ -335,6 +340,14 @@ class UniformRebounceCommand(CommandTerm):
     @property
     def last_apex_target_height(self) -> torch.Tensor:
         return self._last_apex_target_height
+
+    @property
+    def apex_cycle_time_pulse(self) -> torch.Tensor:
+        return self._apex_cycle_time_pulse
+
+    @property
+    def last_apex_cycle_time(self) -> torch.Tensor:
+        return self._last_apex_cycle_time
 
     @property
     def flight_excess_joint_vel_pulse(self) -> torch.Tensor:
@@ -367,6 +380,8 @@ class UniformRebounceCommand(CommandTerm):
         feet_above_clearance, feet_below_clearance = self._feet_clearance_flags()
         feet_above_flight_start, feet_below_flight_start = self._feet_clearance_flags(self.cfg.flight_start_clearance)
         zero = torch.zeros_like(self._flight_excess_joint_vel_sum)
+        self._time_since_last_apex += float(self._env.step_dt)
+        self._apex_cycle_time_pulse.zero_()
         self._flight_excess_joint_vel_pulse.zero_()
         self._flight_excess_joint_vel_sum = torch.where(
             feet_below_flight_start, zero, self._flight_excess_joint_vel_sum
@@ -391,11 +406,14 @@ class UniformRebounceCommand(CommandTerm):
         )
         is_apex = self._apex_armed & (self._prev_vz > 0.0) & (vz <= 0.0) & feet_above_clearance
         height_matched_apex = self._height_matched_apex(is_apex, height)
+        apex_cycle_time = self._time_since_last_apex
         self._is_apex = is_apex
         self._last_apex_height = torch.where(is_apex, height, self._last_apex_height)
         self._last_apex_target_height = torch.where(
             is_apex, self.target_apex_height, self._last_apex_target_height
         )
+        self._apex_cycle_time_pulse = torch.where(is_apex, apex_cycle_time, self._apex_cycle_time_pulse)
+        self._last_apex_cycle_time = torch.where(is_apex, apex_cycle_time, self._last_apex_cycle_time)
         flight_excess_joint_vel = self._flight_excess_joint_vel_sum / self._flight_excess_joint_vel_count.clamp_min(1.0)
         self._flight_excess_joint_vel_pulse = torch.where(
             is_apex, flight_excess_joint_vel, self._flight_excess_joint_vel_pulse
@@ -418,16 +436,26 @@ class UniformRebounceCommand(CommandTerm):
             self._height_matched_apex_count + 1.0,
             self._height_matched_apex_count,
         )
+        self._mean_apex_cycle_time = torch.where(
+            is_apex,
+            self._mean_apex_cycle_time
+            + (apex_cycle_time - self._mean_apex_cycle_time) / new_apex_count.clamp_min(1.0),
+            self._mean_apex_cycle_time,
+        )
         self._mean_flight_excess_joint_vel = torch.where(
             is_apex,
             self._mean_flight_excess_joint_vel
             + (flight_excess_joint_vel - self._mean_flight_excess_joint_vel) / new_apex_count.clamp_min(1.0),
             self._mean_flight_excess_joint_vel,
         )
+        self._time_since_last_apex = torch.where(
+            is_apex, torch.zeros_like(self._time_since_last_apex), self._time_since_last_apex
+        )
         self._flight_excess_joint_vel_sum = torch.where(is_apex, zero, self._flight_excess_joint_vel_sum)
         self._flight_excess_joint_vel_count = torch.where(is_apex, zero, self._flight_excess_joint_vel_count)
         self.metrics["apex_count"][:] = self._apex_count
         self.metrics["height_matched_apex_count"][:] = self._height_matched_apex_count
+        self.metrics["apex_cycle_time"][:] = self._mean_apex_cycle_time
         self.metrics["flight_excess_joint_vel"][:] = self._mean_flight_excess_joint_vel
         self._apex_armed = self._apex_armed & ~is_apex
         self._prev_vz = vz.clone()
@@ -468,6 +496,10 @@ class UniformRebounceCommand(CommandTerm):
             self._prev_vz.zero_()
             self._apex_count.zero_()
             self._height_matched_apex_count.zero_()
+            self._time_since_last_apex.zero_()
+            self._apex_cycle_time_pulse.zero_()
+            self._last_apex_cycle_time.zero_()
+            self._mean_apex_cycle_time.zero_()
             self._flight_excess_joint_vel_sum.zero_()
             self._flight_excess_joint_vel_count.zero_()
             self._flight_excess_joint_vel_pulse.zero_()
@@ -482,6 +514,10 @@ class UniformRebounceCommand(CommandTerm):
             self._prev_vz[env_ids] = 0.0
             self._apex_count[env_ids] = 0.0
             self._height_matched_apex_count[env_ids] = 0.0
+            self._time_since_last_apex[env_ids] = 0.0
+            self._apex_cycle_time_pulse[env_ids] = 0.0
+            self._last_apex_cycle_time[env_ids] = 0.0
+            self._mean_apex_cycle_time[env_ids] = 0.0
             self._flight_excess_joint_vel_sum[env_ids] = 0.0
             self._flight_excess_joint_vel_count[env_ids] = 0.0
             self._flight_excess_joint_vel_pulse[env_ids] = 0.0

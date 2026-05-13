@@ -186,6 +186,38 @@ class rebounce_height_tracking_exp(ManagerTermBase):
         return cmd.is_apex.float() * torch.exp(-torch.square(height_error / std)) * orientation_reward
 
 
+class rebounce_height_tracking_cycle_normalized_exp(rebounce_height_tracking_exp):
+    """Cycle-normalized variant of the valid-apex height reward.
+
+    The sparse apex pulse is scaled by the elapsed time since the previous
+    valid apex so fixed-length episodes do not favor policies that simply
+    create more apex events per second.
+    """
+
+    def __call__(
+        self,
+        env: ManagerBasedRLEnv,
+        command_name: str,
+        std: float,
+        orientation_std: float,
+        cycle_time_max: float = 2.0,
+        asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+    ) -> torch.Tensor:
+        del asset_cfg  # resolved in __init__
+        robot: Articulation = env.scene[self._asset_name]
+        cmd = env.command_manager.get_term(command_name)
+
+        orientation_error = torch.sum(torch.square(robot.data.projected_gravity_b[:, :2]), dim=1)
+        orientation_reward = torch.exp(-orientation_error / (orientation_std * orientation_std))
+        height_error = torch.abs(cmd.last_apex_height - cmd.last_apex_target_height)
+        height_reward = torch.exp(-torch.square(height_error / std))
+        cycle_time = cmd.apex_cycle_time_pulse.clamp_min(float(env.step_dt))
+        if cycle_time_max > 0.0:
+            cycle_time = cycle_time.clamp_max(cycle_time_max)
+        cycle_normalizer = cycle_time / max(float(env.step_dt), 1.0e-6)
+        return cmd.is_apex.float() * height_reward * orientation_reward * cycle_normalizer
+
+
 def joint_mechanical_energy_penalty(
     env: ManagerBasedRLEnv,
     command_name: str,
