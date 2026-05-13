@@ -69,9 +69,13 @@ from isaaclab_tasks.utils.hydra import hydra_task_config
 
 # Import extensions to set up environment tasks
 import whole_body_tracking.tasks  # noqa: F401
-from whole_body_tracking.sensors import DobContactSensor
+from whole_body_tracking.sensors import create_dob_contact_sensor, get_or_create_dob_contact_sensor
 from whole_body_tracking.utils.exporter import attach_onnx_metadata, get_policy_export_normalizer
 from whole_body_tracking.utils.task_utils import apply_play_overrides
+
+
+CONTACT_FORCE_FOOT_NAMES = ("FL_foot", "FR_foot", "RL_foot", "RR_foot")
+CONTACT_FORCE_AXES = ("x", "y", "z")
 
 
 def _mean(values):
@@ -142,18 +146,20 @@ def _print_trampoline_params(env, reset_count: int):
 
 
 class JointVelocityCsvLogger:
-    """Temporary play logger for choosing joint-velocity deadbands."""
+    """Temporary play logger for joint-velocity deadbands and DOB contact-force checks."""
 
-    def __init__(self, env, hop_command, csv_path: str):
+    def __init__(self, env, hop_command, csv_path: str, contact_sensors: dict[str, object] | None = None):
         self.env = env
         self.hop_command = hop_command
         self.robot = env.unwrapped.scene["robot"]
         self.csv_path = os.path.abspath(os.path.expanduser(csv_path))
+        self.contact_sensors = contact_sensors or {}
+        self.contact_sensor_labels = tuple(self.contact_sensors.keys())
         os.makedirs(os.path.dirname(self.csv_path), exist_ok=True)
         self._file = open(self.csv_path, "w", newline="")
         self._writer = csv.writer(self._file)
         self._write_header()
-        print(f"[INFO]: Logging joint velocities to {self.csv_path}", flush=True)
+        print(f"[INFO]: Logging joint velocities and DOB contact forces to {self.csv_path}", flush=True)
 
     def _write_header(self):
         header = [
@@ -169,6 +175,11 @@ class JointVelocityCsvLogger:
             "min_foot_z",
             "max_foot_z",
         ]
+        for label in self.contact_sensor_labels:
+            header.append(f"contact_force/{label}/valid")
+            header.extend(f"contact_force/{label}/total/{axis}" for axis in CONTACT_FORCE_AXES)
+            for foot_name in CONTACT_FORCE_FOOT_NAMES:
+                header.extend(f"contact_force/{label}/{foot_name}/{axis}" for axis in CONTACT_FORCE_AXES)
         header.extend(f"joint_vel/{name}" for name in self.robot.joint_names)
         self._writer.writerow(header)
 
@@ -185,6 +196,34 @@ class JointVelocityCsvLogger:
             return float("nan"), float("nan")
         foot_z_local = foot_asset.data.body_pos_w[0, foot_body_ids, 2] - self.env.unwrapped.scene.env_origins[0, 2]
         return float(torch.min(foot_z_local).item()), float(torch.max(foot_z_local).item())
+
+    def _contact_sensor_values(self, sensor) -> list[str]:
+        nan_values = ["nan"] * (1 + 3 + 3 * len(CONTACT_FORCE_FOOT_NAMES))
+        data = getattr(sensor, "data", None)
+        if data is None:
+            return nan_values
+
+        try:
+            valid = int(bool(data.valid[0].item()))
+            total_force = data.total_force_w[0].detach().cpu().tolist()
+            foot_forces = data.foot_forces_w[0].detach().cpu()
+        except (AttributeError, IndexError, RuntimeError):
+            return nan_values
+
+        values = [str(valid)]
+        values.extend(f"{float(value):.6f}" for value in total_force[:3])
+        for foot_id in range(len(CONTACT_FORCE_FOOT_NAMES)):
+            if foot_id >= foot_forces.shape[0]:
+                values.extend(["nan", "nan", "nan"])
+            else:
+                values.extend(f"{float(value):.6f}" for value in foot_forces[foot_id, :3].tolist())
+        return values
+
+    def _contact_values(self) -> list[str]:
+        values = []
+        for label in self.contact_sensor_labels:
+            values.extend(self._contact_sensor_values(self.contact_sensors[label]))
+        return values
 
     def record(self, global_step: int, episode: int, sim_time_s: float):
         is_air, feet_below_clearance = self._air_flags()
@@ -207,6 +246,7 @@ class JointVelocityCsvLogger:
                 f"{root_vz:.6f}",
                 f"{min_foot_z:.6f}",
                 f"{max_foot_z:.6f}",
+                *self._contact_values(),
                 *[f"{value:.6f}" for value in joint_vel],
             ]
         )
@@ -520,9 +560,24 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     apex_count = 0
     episode_count = 0
     episode_stats = EpisodeStats(env, energy_command)
-    dob_sensor = DobContactSensor(env)
+    pinocchio_dob_sensor = create_dob_contact_sensor(env, backend="pinocchio", fallback_to_gpu=True)
+    gpu_dob_sensor = get_or_create_dob_contact_sensor(env, backend="gpu", update=False)
+    contact_sensors = {
+        "pinocchio": pinocchio_dob_sensor,
+        "gpu": gpu_dob_sensor,
+    }
+    print(
+        "[INFO]: DOB contact sensors: "
+        f"pinocchio columns use backend={getattr(pinocchio_dob_sensor, 'dob_backend', 'unknown')}, "
+        f"gpu columns use backend={getattr(gpu_dob_sensor, 'dob_backend', 'unknown')}",
+        flush=True,
+    )
     joint_vel_csv_path = _joint_vel_csv_path(resume_path, name_prefix)
-    joint_vel_logger = None if args_cli.no_joint_vel_csv else JointVelocityCsvLogger(env, hop_command, joint_vel_csv_path)
+    joint_vel_logger = (
+        None
+        if args_cli.no_joint_vel_csv
+        else JointVelocityCsvLogger(env, hop_command, joint_vel_csv_path, contact_sensors=contact_sensors)
+    )
     play_step_count = 0
     sim_step_dt = float(env.unwrapped.step_dt)
     video_step_count = 0
@@ -536,9 +591,10 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
                 actions = policy(obs)
             obs, _, dones, _ = env.step(actions)
             play_step_count += 1
+            for sensor in contact_sensors.values():
+                sensor.update()
             if joint_vel_logger is not None:
                 joint_vel_logger.record(play_step_count, episode_count, play_step_count * sim_step_dt)
-            dob_sensor.update()
 
             if hop_command is not None and bool(hop_command.is_apex[0]):
                 apex_count += 1
@@ -552,7 +608,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
                     positive_work_per_height = float(energy_command.work_per_height_pulse("positive")[0])
                     absolute_work_per_height = float(energy_command.work_per_height_pulse("absolute")[0])
                     energy_text = f" pos/h={positive_work_per_height:.1f} abs/h={absolute_work_per_height:.1f} J/m"
-                dob_metrics = dob_sensor.consume_hop_metrics(0, target_height)
+                dob_metrics = pinocchio_dob_sensor.consume_hop_metrics(0, target_height)
                 energy_text += (
                     f" dob+={dob_metrics['positive_work_per_height']:.1f} "
                     f"dob-={dob_metrics['negative_work_per_height']:.1f} "
@@ -568,7 +624,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             if bool(dones[0]):
                 episode_count += 1
                 _print_episode_summary(episode_count, episode_stats.summary(_get_done_reasons(env)))
-                dob_metrics = dob_sensor.episode_metrics(0)
+                dob_metrics = pinocchio_dob_sensor.episode_metrics(0)
                 print(
                     f"[DOB{episode_count:03d}] dobW+={dob_metrics['positive_work']:.1f} "
                     f"dobW-={dob_metrics['negative_work']:.1f} dobR={dob_metrics['return_ratio']:.2f} "
@@ -578,7 +634,8 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
                 reset_count += 1
                 apex_count = 0
                 episode_stats.reset(env)
-                dob_sensor.reset()
+                for sensor in contact_sensors.values():
+                    sensor.reset()
                 _print_trampoline_params(env, reset_count)
 
             if args_cli.video:
