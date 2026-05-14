@@ -267,9 +267,8 @@ class UniformRebounceCommand(CommandTerm):
     independently sampled drop height. Tracks periodic drop/rebound/apex state
     so rewards can fire once per valid apex while the episode continues.
 
-    Unlike :class:`UniformHoppingCommand`, this class does **not** depend on
-    the contact sensor: rebounce semantics are encoded by root vertical
-    velocity and geometric foot clearance.
+    Rebounce semantics are driven by a DOB contact-force stance state. Foot
+    clearance remains only as a fallback when the DOB sensor is still warming up.
     """
 
     cfg: UniformRebounceCommandCfg
@@ -277,6 +276,11 @@ class UniformRebounceCommand(CommandTerm):
     def __init__(self, cfg: UniformRebounceCommandCfg, env: ManagerBasedRLEnv):
         super().__init__(cfg, env)
         self.robot: Articulation = env.scene[cfg.asset_cfg.name]
+        try:
+            self.trampoline = env.scene[cfg.trampoline_asset_name]
+        except KeyError:
+            self.trampoline = None
+        self._trampoline_center_node_id = self._resolve_trampoline_center_node_id()
         cfg.joint_velocity_asset_cfg.resolve(env.scene)
         self._joint_velocity_asset: Articulation = env.scene[cfg.joint_velocity_asset_cfg.name]
         self._joint_velocity_ids = cfg.joint_velocity_asset_cfg.joint_ids
@@ -298,9 +302,26 @@ class UniformRebounceCommand(CommandTerm):
         self._is_apex = torch.zeros(n, dtype=torch.bool, device=dev)
         self._last_apex_height = torch.zeros(n, device=dev)
         self._last_apex_target_height = torch.zeros(n, device=dev)
-        self._apex_armed = torch.ones(n, dtype=torch.bool, device=dev)
+        self._apex_armed = torch.zeros(n, dtype=torch.bool, device=dev)
         self._prev_vz = torch.zeros(n, device=dev)
+        self._dob_sensor = get_or_create_dob_contact_sensor(env, backend=cfg.contact_backend, update=False)
+        self._dob_total_force_z = torch.zeros(n, device=dev)
+        self._in_stance = torch.zeros(n, dtype=torch.bool, device=dev)
+        self._in_flight = torch.zeros(n, dtype=torch.bool, device=dev)
+        self._flight_active = torch.zeros(n, dtype=torch.bool, device=dev)
+        self._is_touchdown = torch.zeros(n, dtype=torch.bool, device=dev)
+        self._is_liftoff = torch.zeros(n, dtype=torch.bool, device=dev)
+        self._is_max_compression = torch.zeros(n, dtype=torch.bool, device=dev)
+        self._in_compression_phase = torch.zeros(n, dtype=torch.bool, device=dev)
+        self._in_release_phase = torch.zeros(n, dtype=torch.bool, device=dev)
+        self._trampoline_center_z = torch.zeros(n, device=dev)
+        self._trampoline_center_vz = torch.zeros(n, device=dev)
+        self._prev_trampoline_center_vz = torch.zeros(n, device=dev)
+        self._trampoline_compression = torch.zeros(n, device=dev)
+        self._trampoline_rest_z = self._compute_trampoline_rest_z()
+        self._flight_steps_since_liftoff = torch.zeros(n, device=dev)
         self._apex_count = torch.zeros(n, device=dev)
+        self._flight_count = torch.zeros(n, device=dev)
         self._height_matched_apex_count = torch.zeros(n, device=dev)
         self._time_since_last_apex = torch.zeros(n, device=dev)
         self._apex_cycle_time_pulse = torch.zeros(n, device=dev)
@@ -308,6 +329,7 @@ class UniformRebounceCommand(CommandTerm):
         self._mean_apex_cycle_time = torch.zeros(n, device=dev)
         self._flight_excess_joint_vel_sum = torch.zeros(n, device=dev)
         self._flight_excess_joint_vel_count = torch.zeros(n, device=dev)
+        self._flight_excess_joint_vel_step = torch.zeros(n, device=dev)
         self._flight_excess_joint_vel_pulse = torch.zeros(n, device=dev)
         self._last_flight_excess_joint_vel = torch.zeros(n, device=dev)
         self._mean_flight_excess_joint_vel = torch.zeros(n, device=dev)
@@ -334,6 +356,50 @@ class UniformRebounceCommand(CommandTerm):
         return self._is_apex
 
     @property
+    def is_touchdown(self) -> torch.Tensor:
+        return self._is_touchdown
+
+    @property
+    def is_liftoff(self) -> torch.Tensor:
+        return self._is_liftoff
+
+    @property
+    def is_max_compression(self) -> torch.Tensor:
+        return self._is_max_compression
+
+    @property
+    def in_stance(self) -> torch.Tensor:
+        return self._in_stance
+
+    @property
+    def in_flight(self) -> torch.Tensor:
+        return self._in_flight
+
+    @property
+    def in_compression_phase(self) -> torch.Tensor:
+        return self._in_compression_phase
+
+    @property
+    def in_release_phase(self) -> torch.Tensor:
+        return self._in_release_phase
+
+    @property
+    def trampoline_center_z(self) -> torch.Tensor:
+        return self._trampoline_center_z
+
+    @property
+    def trampoline_center_vz(self) -> torch.Tensor:
+        return self._trampoline_center_vz
+
+    @property
+    def trampoline_compression(self) -> torch.Tensor:
+        return self._trampoline_compression
+
+    @property
+    def dob_total_force_z(self) -> torch.Tensor:
+        return self._dob_total_force_z
+
+    @property
     def last_apex_height(self) -> torch.Tensor:
         return self._last_apex_height
 
@@ -354,6 +420,10 @@ class UniformRebounceCommand(CommandTerm):
         return self._flight_excess_joint_vel_pulse
 
     @property
+    def flight_excess_joint_vel_step(self) -> torch.Tensor:
+        return self._flight_excess_joint_vel_step
+
+    @property
     def last_flight_excess_joint_vel(self) -> torch.Tensor:
         return self._last_flight_excess_joint_vel
 
@@ -367,60 +437,153 @@ class UniformRebounceCommand(CommandTerm):
         threshold = self.cfg.surface_z + (self.cfg.foot_clearance if clearance is None else clearance)
         return min_foot_z > threshold, max_foot_z <= threshold
 
+    def _resolve_trampoline_center_node_id(self) -> int | None:
+        if self.trampoline is None:
+            return None
+        default_nodal_state = getattr(self.trampoline.data, "default_nodal_state_w", None)
+        if default_nodal_state is None:
+            return None
+        nodal_pos = default_nodal_state[0, :, :3]
+        center_xy = nodal_pos[:, :2].mean(dim=0, keepdim=True)
+        radial_distance = torch.linalg.vector_norm(nodal_pos[:, :2] - center_xy, dim=-1)
+        return int(torch.argmin(radial_distance).item())
+
+    def _compute_trampoline_rest_z(self) -> torch.Tensor:
+        if self.trampoline is None or self._trampoline_center_node_id is None:
+            return torch.zeros(self.num_envs, device=self.device)
+        default_nodal_state = getattr(self.trampoline.data, "default_nodal_state_w", None)
+        if default_nodal_state is None:
+            return torch.zeros(self.num_envs, device=self.device)
+        return default_nodal_state[:, self._trampoline_center_node_id, 2].to(device=self.device)
+
     def _height_matched_apex(self, is_apex: torch.Tensor, height: torch.Tensor) -> torch.Tensor:
         height_ok = torch.abs(height - self.target_apex_height) < self.cfg.apex_height_tolerance
         return is_apex & height_ok
 
+    def _dob_stance_flags(self) -> torch.Tensor:
+        _, feet_below_clearance = self._feet_clearance_flags()
+        self._dob_sensor.update()
+        data = self._dob_sensor.data
+        valid = data.valid
+        force_z = torch.clamp(data.total_force_w[:, 2], min=0.0)
+        self._dob_total_force_z = force_z
+        dob_stance = (force_z > self.cfg.contact_force_enter_threshold) | (
+            self._in_stance & (force_z > self.cfg.contact_force_exit_threshold)
+        )
+        return torch.where(valid, dob_stance, feet_below_clearance)
+
+    def _update_trampoline_phase_flags(self, in_stance: torch.Tensor):
+        if self.trampoline is None or self._trampoline_center_node_id is None:
+            self._is_max_compression.zero_()
+            self._in_compression_phase.zero_()
+            self._in_release_phase.zero_()
+            return
+        center_z = self.trampoline.data.nodal_pos_w[:, self._trampoline_center_node_id, 2]
+        center_vz = self.trampoline.data.nodal_vel_w[:, self._trampoline_center_node_id, 2]
+        compression = self._trampoline_rest_z - center_z
+        compressed = compression > self.cfg.trampoline_compression_threshold
+        moving_down = center_vz < -self.cfg.trampoline_phase_velocity_threshold
+        moving_up = center_vz > self.cfg.trampoline_phase_velocity_threshold
+
+        self._in_compression_phase = in_stance & compressed & moving_down
+        self._in_release_phase = in_stance & compressed & moving_up
+        self._is_max_compression = (
+            in_stance
+            & compressed
+            & (self._prev_trampoline_center_vz < 0.0)
+            & (center_vz >= 0.0)
+        )
+        self._trampoline_center_z = center_z
+        self._trampoline_center_vz = center_vz
+        self._trampoline_compression = compression
+        self._prev_trampoline_center_vz = center_vz.clone()
+
     def _update_metrics(self):
         height = self.robot.data.root_pos_w[:, 2]
         vz = self.robot.data.root_lin_vel_w[:, 2]
-        # Periodic event detector:
-        # feet return below clearance -> arm -> upward-to-non-upward velocity
-        # crossing with feet above clearance -> valid apex pulse -> disarm.
-        feet_above_clearance, feet_below_clearance = self._feet_clearance_flags()
-        feet_above_flight_start, feet_below_flight_start = self._feet_clearance_flags(self.cfg.flight_start_clearance)
-        zero = torch.zeros_like(self._flight_excess_joint_vel_sum)
+        # DOB-driven event detector:
+        # touchdown disarms apex, liftoff arms apex, and the first upward-to-
+        # non-upward root velocity crossing in flight emits the valid apex pulse.
+        prev_in_stance = self._in_stance
+        in_stance = self._dob_stance_flags()
+        is_touchdown = ~prev_in_stance & in_stance
+        is_liftoff = prev_in_stance & ~in_stance
+        self._update_trampoline_phase_flags(in_stance)
+        zero = torch.zeros_like(self._target_apex_height)
         self._time_since_last_apex += float(self._env.step_dt)
         self._apex_cycle_time_pulse.zero_()
+        self._flight_excess_joint_vel_step.zero_()
         self._flight_excess_joint_vel_pulse.zero_()
+
+        completed_flight_excess_joint_vel = self._flight_excess_joint_vel_sum / (
+            self._flight_excess_joint_vel_count.clamp_min(1.0)
+        )
+        completed_flight = is_touchdown & (self._flight_excess_joint_vel_count > 0.0)
+        self._flight_excess_joint_vel_pulse = torch.where(
+            completed_flight, completed_flight_excess_joint_vel, self._flight_excess_joint_vel_pulse
+        )
+        self._last_flight_excess_joint_vel = torch.where(
+            completed_flight, completed_flight_excess_joint_vel, self._last_flight_excess_joint_vel
+        )
+        new_flight_count = torch.where(completed_flight, self._flight_count + 1.0, self._flight_count)
+        self._mean_flight_excess_joint_vel = torch.where(
+            completed_flight,
+            self._mean_flight_excess_joint_vel
+            + (completed_flight_excess_joint_vel - self._mean_flight_excess_joint_vel)
+            / new_flight_count.clamp_min(1.0),
+            self._mean_flight_excess_joint_vel,
+        )
+        self._flight_count = new_flight_count
+
         self._flight_excess_joint_vel_sum = torch.where(
-            feet_below_flight_start, zero, self._flight_excess_joint_vel_sum
+            is_touchdown | is_liftoff, zero, self._flight_excess_joint_vel_sum
         )
         self._flight_excess_joint_vel_count = torch.where(
-            feet_below_flight_start, zero, self._flight_excess_joint_vel_count
+            is_touchdown | is_liftoff, zero, self._flight_excess_joint_vel_count
         )
-        self._apex_armed = self._apex_armed | feet_below_clearance
-        flight_up = self._apex_armed & feet_above_flight_start & (vz > 0.0)
+        self._flight_steps_since_liftoff = torch.where(is_liftoff, zero, self._flight_steps_since_liftoff)
+        flight_active = torch.where(is_touchdown, torch.zeros_like(self._flight_active), self._flight_active)
+        flight_active = flight_active | is_liftoff
+        in_flight = flight_active & ~in_stance
+
         joint_vel = self._joint_velocity_asset.data.joint_vel[:, self._joint_velocity_ids]
         excess_joint_vel = torch.clamp(torch.abs(joint_vel) - self._joint_velocity_deadbands.unsqueeze(0), min=0.0)
         step_mean_excess_joint_vel = torch.mean(excess_joint_vel, dim=1)
+        flight_sample = in_flight & (self._flight_steps_since_liftoff >= float(self.cfg.flight_joint_velocity_delay_steps))
+        self._flight_excess_joint_vel_step = torch.where(
+            flight_sample, step_mean_excess_joint_vel, self._flight_excess_joint_vel_step
+        )
         self._flight_excess_joint_vel_sum = torch.where(
-            flight_up,
+            flight_sample,
             self._flight_excess_joint_vel_sum + step_mean_excess_joint_vel,
             self._flight_excess_joint_vel_sum,
         )
         self._flight_excess_joint_vel_count = torch.where(
-            flight_up,
+            flight_sample,
             self._flight_excess_joint_vel_count + 1.0,
             self._flight_excess_joint_vel_count,
         )
-        is_apex = self._apex_armed & (self._prev_vz > 0.0) & (vz <= 0.0) & feet_above_clearance
+        self._flight_steps_since_liftoff = torch.where(
+            in_flight, self._flight_steps_since_liftoff + 1.0, zero
+        )
+
+        self._apex_armed = torch.where(is_touchdown, torch.zeros_like(self._apex_armed), self._apex_armed)
+        self._apex_armed = self._apex_armed | is_liftoff
+        is_apex = self._apex_armed & in_flight & (self._prev_vz > 0.0) & (vz <= 0.0)
         height_matched_apex = self._height_matched_apex(is_apex, height)
         apex_cycle_time = self._time_since_last_apex
         self._is_apex = is_apex
+        self._is_touchdown = is_touchdown
+        self._is_liftoff = is_liftoff
+        self._in_stance = in_stance
+        self._in_flight = in_flight
+        self._flight_active = flight_active
         self._last_apex_height = torch.where(is_apex, height, self._last_apex_height)
         self._last_apex_target_height = torch.where(
             is_apex, self.target_apex_height, self._last_apex_target_height
         )
         self._apex_cycle_time_pulse = torch.where(is_apex, apex_cycle_time, self._apex_cycle_time_pulse)
         self._last_apex_cycle_time = torch.where(is_apex, apex_cycle_time, self._last_apex_cycle_time)
-        flight_excess_joint_vel = self._flight_excess_joint_vel_sum / self._flight_excess_joint_vel_count.clamp_min(1.0)
-        self._flight_excess_joint_vel_pulse = torch.where(
-            is_apex, flight_excess_joint_vel, self._flight_excess_joint_vel_pulse
-        )
-        self._last_flight_excess_joint_vel = torch.where(
-            is_apex, flight_excess_joint_vel, self._last_flight_excess_joint_vel
-        )
 
         apex_error = torch.abs(self._last_apex_height - self._last_apex_target_height)
         new_apex_count = torch.where(is_apex, self._apex_count + 1.0, self._apex_count)
@@ -442,17 +605,9 @@ class UniformRebounceCommand(CommandTerm):
             + (apex_cycle_time - self._mean_apex_cycle_time) / new_apex_count.clamp_min(1.0),
             self._mean_apex_cycle_time,
         )
-        self._mean_flight_excess_joint_vel = torch.where(
-            is_apex,
-            self._mean_flight_excess_joint_vel
-            + (flight_excess_joint_vel - self._mean_flight_excess_joint_vel) / new_apex_count.clamp_min(1.0),
-            self._mean_flight_excess_joint_vel,
-        )
         self._time_since_last_apex = torch.where(
             is_apex, torch.zeros_like(self._time_since_last_apex), self._time_since_last_apex
         )
-        self._flight_excess_joint_vel_sum = torch.where(is_apex, zero, self._flight_excess_joint_vel_sum)
-        self._flight_excess_joint_vel_count = torch.where(is_apex, zero, self._flight_excess_joint_vel_count)
         self.metrics["apex_count"][:] = self._apex_count
         self.metrics["height_matched_apex_count"][:] = self._height_matched_apex_count
         self.metrics["apex_cycle_time"][:] = self._mean_apex_cycle_time
@@ -492,9 +647,25 @@ class UniformRebounceCommand(CommandTerm):
             self._is_apex.zero_()
             self._last_apex_height.zero_()
             self._last_apex_target_height.zero_()
-            self._apex_armed.fill_(True)
+            self._apex_armed.zero_()
             self._prev_vz.zero_()
+            self._dob_total_force_z.zero_()
+            self._in_stance.zero_()
+            self._in_flight.zero_()
+            self._flight_active.zero_()
+            self._is_touchdown.zero_()
+            self._is_liftoff.zero_()
+            self._is_max_compression.zero_()
+            self._in_compression_phase.zero_()
+            self._in_release_phase.zero_()
+            self._trampoline_center_z.zero_()
+            self._trampoline_center_vz.zero_()
+            self._prev_trampoline_center_vz.zero_()
+            self._trampoline_compression.zero_()
+            self._trampoline_rest_z = self._compute_trampoline_rest_z()
+            self._flight_steps_since_liftoff.zero_()
             self._apex_count.zero_()
+            self._flight_count.zero_()
             self._height_matched_apex_count.zero_()
             self._time_since_last_apex.zero_()
             self._apex_cycle_time_pulse.zero_()
@@ -502,6 +673,7 @@ class UniformRebounceCommand(CommandTerm):
             self._mean_apex_cycle_time.zero_()
             self._flight_excess_joint_vel_sum.zero_()
             self._flight_excess_joint_vel_count.zero_()
+            self._flight_excess_joint_vel_step.zero_()
             self._flight_excess_joint_vel_pulse.zero_()
             self._last_flight_excess_joint_vel.zero_()
             self._mean_flight_excess_joint_vel.zero_()
@@ -510,9 +682,25 @@ class UniformRebounceCommand(CommandTerm):
             self._is_apex[env_ids] = False
             self._last_apex_height[env_ids] = 0.0
             self._last_apex_target_height[env_ids] = 0.0
-            self._apex_armed[env_ids] = True
+            self._apex_armed[env_ids] = False
             self._prev_vz[env_ids] = 0.0
+            self._dob_total_force_z[env_ids] = 0.0
+            self._in_stance[env_ids] = False
+            self._in_flight[env_ids] = False
+            self._flight_active[env_ids] = False
+            self._is_touchdown[env_ids] = False
+            self._is_liftoff[env_ids] = False
+            self._is_max_compression[env_ids] = False
+            self._in_compression_phase[env_ids] = False
+            self._in_release_phase[env_ids] = False
+            self._trampoline_center_z[env_ids] = 0.0
+            self._trampoline_center_vz[env_ids] = 0.0
+            self._prev_trampoline_center_vz[env_ids] = 0.0
+            self._trampoline_compression[env_ids] = 0.0
+            self._trampoline_rest_z[env_ids] = self._compute_trampoline_rest_z()[env_ids]
+            self._flight_steps_since_liftoff[env_ids] = 0.0
             self._apex_count[env_ids] = 0.0
+            self._flight_count[env_ids] = 0.0
             self._height_matched_apex_count[env_ids] = 0.0
             self._time_since_last_apex[env_ids] = 0.0
             self._apex_cycle_time_pulse[env_ids] = 0.0
@@ -520,6 +708,7 @@ class UniformRebounceCommand(CommandTerm):
             self._mean_apex_cycle_time[env_ids] = 0.0
             self._flight_excess_joint_vel_sum[env_ids] = 0.0
             self._flight_excess_joint_vel_count[env_ids] = 0.0
+            self._flight_excess_joint_vel_step[env_ids] = 0.0
             self._flight_excess_joint_vel_pulse[env_ids] = 0.0
             self._last_flight_excess_joint_vel[env_ids] = 0.0
             self._mean_flight_excess_joint_vel[env_ids] = 0.0
@@ -534,8 +723,14 @@ class UniformRebounceCommandCfg(CommandTermCfg):
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
     foot_asset_cfg: SceneEntityCfg | None = None
     foot_clearance: float = 0.0
-    flight_start_clearance: float = 0.0
     surface_z: float = 0.0
+    trampoline_asset_name: str = "trampoline"
+    trampoline_compression_threshold: float = 0.005
+    trampoline_phase_velocity_threshold: float = 0.05
+    contact_backend: str = "gpu"
+    contact_force_enter_threshold: float = 50.0
+    contact_force_exit_threshold: float = 15.0
+    flight_joint_velocity_delay_steps: int = 3
     apex_height_tolerance: float = 0.05
     joint_velocity_asset_cfg: SceneEntityCfg = SceneEntityCfg("robot", joint_names=[".*"])
     joint_velocity_deadbands: dict[str, float] = MISSING

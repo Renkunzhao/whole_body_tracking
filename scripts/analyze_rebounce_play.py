@@ -22,6 +22,12 @@ DEADBAND_PHASES = ("air", "flight_up", "flight_down", "apex_band", "apex_pulse",
 JOINT_GROUPS = ("hip", "thigh", "calf")
 
 
+def _flight_mask(df: pd.DataFrame) -> pd.Series:
+    if "in_flight" in df.columns:
+        return df["in_flight"].astype(bool)
+    return df["is_air"].astype(bool)
+
+
 def _joint_name(column: str) -> str:
     return column.removeprefix("joint_vel/")
 
@@ -37,7 +43,7 @@ def _joint_group(joint_name: str) -> str:
 
 
 def _phase_masks(df: pd.DataFrame, vz_threshold: float) -> dict[str, pd.Series]:
-    is_air = df["is_air"].astype(bool)
+    is_air = _flight_mask(df)
     is_apex = df["is_apex"].astype(bool)
     root_vz = df["root_vz"].astype(float)
     return {
@@ -111,20 +117,20 @@ def _mask_segments(time_s: np.ndarray, mask: np.ndarray) -> list[tuple[float, fl
     return segments
 
 
-def _shade_air(ax, time_s: np.ndarray, is_air: np.ndarray) -> None:
-    for start, end in _mask_segments(time_s, is_air):
+def _shade_flight(ax, time_s: np.ndarray, in_flight: np.ndarray) -> None:
+    for start, end in _mask_segments(time_s, in_flight):
         ax.axvspan(start, end, color="0.92", linewidth=0)
 
 
 def _plot_robot_trampoline_vertical_state(df: pd.DataFrame, output_path: Path) -> None:
     time_s = df["sim_time_s"].to_numpy()
-    is_air = df["is_air"].astype(bool).to_numpy()
+    in_flight = _flight_mask(df).to_numpy()
     has_trampoline_center = {"trampoline_center/z", "trampoline_center/vz"}.issubset(df.columns)
 
     fig, axes = plt.subplots(2, 1, figsize=(14, 5.5), sharex=True)
     pos_ax, vel_ax = axes
     for ax in axes:
-        _shade_air(ax, time_s, is_air)
+        _shade_flight(ax, time_s, in_flight)
         ax.grid(True, alpha=0.25)
 
     pos_ax.plot(time_s, df["root_z"].to_numpy(), color="#1f77b4", linewidth=1.0, label="robot root z")
@@ -144,17 +150,26 @@ def _plot_robot_trampoline_vertical_state(df: pd.DataFrame, output_path: Path) -
             linewidth=1.0,
             label="trampoline center vz",
         )
+    if "trampoline/compression" in df.columns:
+        pos_ax.plot(
+            time_s,
+            df["trampoline/compression"].to_numpy(),
+            color="#2ca02c",
+            linestyle="--",
+            linewidth=1.0,
+            label="trampoline compression",
+        )
 
     vel_ax.axhline(0.0, color="0.3", linewidth=0.7, alpha=0.7)
     vel_ax.axhline(0.5, color="0.4", linestyle="--", linewidth=0.8)
     vel_ax.axhline(-0.5, color="0.4", linestyle="--", linewidth=0.8)
-    pos_ax.plot([], [], color="0.7", linewidth=6, label="air")
-    pos_ax.set_ylabel("z [m]")
+    pos_ax.plot([], [], color="0.7", linewidth=6, label="flight")
+    pos_ax.set_ylabel("z / compression [m]")
     vel_ax.set_ylabel("vz [m/s]")
     vel_ax.set_xlabel("time [s]")
     pos_ax.legend(loc="upper right", fontsize=8)
     vel_ax.legend(loc="upper right", fontsize=8)
-    fig.suptitle("Robot root and trampoline center vertical state. Grey spans are air by foot-clearance gate.", fontsize=12)
+    fig.suptitle("Robot root and trampoline center vertical state. Grey spans are DOB flight state.", fontsize=12)
     fig.tight_layout()
     fig.savefig(output_path, dpi=160)
     plt.close(fig)
@@ -168,7 +183,7 @@ def _plot_joint_timeseries(
     vertical_output_path: Path,
 ) -> None:
     time_s = df["sim_time_s"].to_numpy()
-    is_air = df["is_air"].astype(bool).to_numpy()
+    in_flight = _flight_mask(df).to_numpy()
     fig, axes = plt.subplots(3, 4, figsize=(16, 9), sharex=True)
     axes = axes.reshape(-1)
     band_by_group = {
@@ -189,7 +204,7 @@ def _plot_joint_timeseries(
     for ax, col in zip(axes, joint_cols):
         joint = _joint_name(col)
         group = _joint_group(joint)
-        _shade_air(ax, time_s, is_air)
+        _shade_flight(ax, time_s, in_flight)
         ax.plot(time_s, df[col].to_numpy(), color="#1f77b4", linewidth=1.0)
         if group in band_by_group:
             band = band_by_group[group]
@@ -199,14 +214,14 @@ def _plot_joint_timeseries(
         if group in ylim_by_group:
             ax.set_ylim(*ylim_by_group[group])
         ax.grid(True, alpha=0.25)
-    axes[0].plot([], [], color="0.7", linewidth=6, label="air")
+    axes[0].plot([], [], color="0.7", linewidth=6, label="flight")
     axes[0].plot([], [], color="#d62728", linestyle="--", label="p85 deadband")
     axes[0].legend(loc="upper right", fontsize=8)
     for ax in axes[-4:]:
         ax.set_xlabel("time [s]")
     for ax in axes[::4]:
         ax.set_ylabel("joint vel [rad/s]")
-    fig.suptitle("Rebounce joint velocities. Grey spans are air by foot-clearance gate.", fontsize=12)
+    fig.suptitle("Rebounce joint velocities. Grey spans are DOB flight state.", fontsize=12)
     fig.tight_layout()
     fig.savefig(output_path, dpi=160)
     plt.close(fig)
@@ -301,7 +316,7 @@ def _plot_contact_force_timeseries(df: pd.DataFrame, output_path: Path) -> bool:
         return False
 
     time_s = df["sim_time_s"].to_numpy()
-    is_air = df["is_air"].astype(bool).to_numpy()
+    in_flight = _flight_mask(df).to_numpy()
     colors = {"gpu": "#1f77b4", "pinocchio": "#d62728"}
     ylims = {axis: _contact_force_ylim(df, backends, axis) for axis in CONTACT_FORCE_AXES}
 
@@ -309,7 +324,7 @@ def _plot_contact_force_timeseries(df: pd.DataFrame, output_path: Path) -> bool:
     for row, axis in enumerate(CONTACT_FORCE_AXES):
         for col, foot_name in enumerate(CONTACT_FORCE_FEET):
             ax = axes[row, col]
-            _shade_air(ax, time_s, is_air)
+            _shade_flight(ax, time_s, in_flight)
             for backend in backends:
                 ax.plot(
                     time_s,
@@ -323,13 +338,13 @@ def _plot_contact_force_timeseries(df: pd.DataFrame, output_path: Path) -> bool:
             ax.set_title(f"{foot_name} force {axis}", fontsize=9)
             ax.grid(True, alpha=0.25)
 
-    axes[0, 0].plot([], [], color="0.7", linewidth=6, label="air")
+    axes[0, 0].plot([], [], color="0.7", linewidth=6, label="flight")
     axes[0, 0].legend(loc="upper right", fontsize=8)
     for ax in axes[-1, :]:
         ax.set_xlabel("time [s]")
     for row, axis in enumerate(CONTACT_FORCE_AXES):
         axes[row, 0].set_ylabel(f"force {axis} [N]")
-    fig.suptitle("DOB foot contact force comparison. Grey spans are air by foot-clearance gate.", fontsize=12)
+    fig.suptitle("DOB foot contact force comparison. Grey spans are DOB flight state.", fontsize=12)
     fig.tight_layout()
     fig.savefig(output_path, dpi=160)
     plt.close(fig)

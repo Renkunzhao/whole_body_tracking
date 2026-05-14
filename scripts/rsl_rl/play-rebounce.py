@@ -169,12 +169,20 @@ class RebouncePlayCsvLogger:
             "episode_step",
             "sim_time_s",
             "is_air",
+            "in_flight",
+            "in_stance",
+            "is_touchdown",
+            "is_liftoff",
+            "is_max_compression",
+            "in_release_phase",
             "feet_below_clearance",
             "is_apex",
             "root_z",
             "root_vz",
             "min_foot_z",
             "max_foot_z",
+            "dob_contact_force_z",
+            "trampoline/compression",
             "trampoline_center/z",
             "trampoline_center/vz",
         ]
@@ -190,7 +198,21 @@ class RebouncePlayCsvLogger:
         if self.hop_command is None or not hasattr(self.hop_command, "_feet_clearance_flags"):
             return float("nan"), float("nan")
         feet_above_clearance, feet_below_clearance = self.hop_command._feet_clearance_flags()
-        return int(bool(feet_above_clearance[0].item())), int(bool(feet_below_clearance[0].item()))
+        if hasattr(self.hop_command, "in_flight"):
+            is_air = int(bool(self.hop_command.in_flight[0].item()))
+        else:
+            is_air = int(bool(feet_above_clearance[0].item()))
+        return is_air, int(bool(feet_below_clearance[0].item()))
+
+    def _command_bool(self, name: str) -> int | float:
+        if self.hop_command is None or not hasattr(self.hop_command, name):
+            return float("nan")
+        return int(bool(getattr(self.hop_command, name)[0].item()))
+
+    def _command_float(self, name: str) -> float:
+        if self.hop_command is None or not hasattr(self.hop_command, name):
+            return float("nan")
+        return float(getattr(self.hop_command, name)[0].item())
 
     def _foot_z_range(self) -> tuple[float, float]:
         foot_asset = getattr(self.hop_command, "_foot_asset", None) if self.hop_command is not None else None
@@ -259,6 +281,14 @@ class RebouncePlayCsvLogger:
         is_air, feet_below_clearance = self._air_flags()
         min_foot_z, max_foot_z = self._foot_z_range()
         trampoline_center_z, trampoline_center_vz = self._trampoline_center_z_values()
+        in_flight = self._command_bool("in_flight")
+        in_stance = self._command_bool("in_stance")
+        is_touchdown = self._command_bool("is_touchdown")
+        is_liftoff = self._command_bool("is_liftoff")
+        is_max_compression = self._command_bool("is_max_compression")
+        in_release_phase = self._command_bool("in_release_phase")
+        dob_contact_force_z = self._command_float("dob_total_force_z")
+        trampoline_compression = self._command_float("trampoline_compression")
         episode_step = int(self.env.unwrapped.episode_length_buf[0].item())
         root_z = float(self.robot.data.root_pos_w[0, 2].item())
         root_vz = float(self.robot.data.root_lin_vel_w[0, 2].item())
@@ -271,12 +301,20 @@ class RebouncePlayCsvLogger:
                 episode_step,
                 f"{sim_time_s:.6f}",
                 is_air,
+                in_flight,
+                in_stance,
+                is_touchdown,
+                is_liftoff,
+                is_max_compression,
+                in_release_phase,
                 feet_below_clearance,
                 is_apex,
                 f"{root_z:.6f}",
                 f"{root_vz:.6f}",
                 f"{min_foot_z:.6f}",
                 f"{max_foot_z:.6f}",
+                f"{dob_contact_force_z:.6f}",
+                f"{trampoline_compression:.6f}",
                 f"{trampoline_center_z:.6f}",
                 f"{trampoline_center_vz:.6f}",
                 *self._contact_values(),

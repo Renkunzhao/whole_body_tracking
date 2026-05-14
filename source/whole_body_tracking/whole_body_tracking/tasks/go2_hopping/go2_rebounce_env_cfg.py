@@ -51,7 +51,7 @@ VELOCITY_RANGE = {
 }
 REBOUNCE_OBS_HISTORY_LENGTH = 10
 # Early phase: make hopping discovery easy before restoring the full command and trampoline DR ranges.
-HOPPING_INIT_STEP = 1000 * 24
+HOPPING_INIT_STEP = 000 * 24
 HOPPING_INIT_HEIGHT_RANGE = (0.5, 0.5)
 TRAMPOLINE_FIXED_YOUNGS_MODULUS_RANGE = (8.0e4, 8.0e4)
 TRAMPOLINE_FIXED_MASS_RANGE = (10.0, 10.0)
@@ -134,8 +134,14 @@ class CommandsCfg:
         asset_cfg=SceneEntityCfg("robot"),
         foot_asset_cfg=SceneEntityCfg("robot", body_names=list(GO2_FOOT_BODY_NAMES)),
         foot_clearance=0.08,
-        flight_start_clearance=0.02,
         surface_z=0.0,
+        trampoline_asset_name="trampoline",
+        trampoline_compression_threshold=0.005,
+        trampoline_phase_velocity_threshold=0.05,
+        contact_backend="gpu",
+        contact_force_enter_threshold=50.0,
+        contact_force_exit_threshold=15.0,
+        flight_joint_velocity_delay_steps=3,
         apex_height_tolerance=0.05,
         joint_velocity_asset_cfg=SceneEntityCfg("robot", joint_names=[".*"]),
         joint_velocity_deadbands={

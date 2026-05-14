@@ -239,14 +239,14 @@ def rebounce_flight_excess_joint_velocity_penalty(
     env: ManagerBasedRLEnv,
     command_name: str,
 ) -> torch.Tensor:
-    """Sparse penalty for mean joint velocity above deadbands from takeoff to apex.
+    """Dense in-flight penalty for joint velocity above command-owned deadbands.
 
-    The rebounce command owns the flight window and emits a one-step pulse at
-    each valid apex. The value is averaged over the upward flight samples, so
-    longer flight is not automatically penalized more heavily.
+    The rebounce command owns the DOB liftoff/flight state and applies a small
+    post-liftoff delay before returning the per-step mean excess velocity. This
+    favors quiet legs throughout flight for hardware safety.
     """
     cmd = env.command_manager.get_term(command_name)
-    return cmd.flight_excess_joint_vel_pulse
+    return cmd.flight_excess_joint_vel_step
 
 
 class go2_left_right_joint_symmetry_l2(ManagerTermBase):
