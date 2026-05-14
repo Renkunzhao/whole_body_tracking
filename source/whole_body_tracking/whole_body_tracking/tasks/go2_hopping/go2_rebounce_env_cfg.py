@@ -71,9 +71,10 @@ TRAMPOLINE_DR_YOUNGS_MODULUS_RANGE_BY_SIM_RESOLUTION = {
 TRAMPOLINE_DR_MASS_RANGE = (10.0, 20.0)
 TRAMPOLINE_DR_DYNAMIC_FRICTION_RANGE = (0.4, 1.2)
 TRAMPOLINE_DR_ELASTICITY_DAMPING_RANGE = (0.01, 0.1)
-TRAMPOLINE_DR_DAMPING_SCALE_RANGE = (0.5, 2.0)
+TRAMPOLINE_DR_DAMPING_SCALE_RANGE = (0.5, 1.0)
 TRAMPOLINE_DR_POISSONS_RATIO_RANGE = (0.25, 0.45)
 TRAMPOLINE_DR_PIN_WIDTH_RANGE = (0.3, 0.5)
+TRAMPOLINE_GPU_COLLISION_STACK_SIZE = 2**28
 TRAMPOLINE_GEOMETRY_BUCKETS = (
     (0.03, 10),
     (0.10, 10),
@@ -667,6 +668,10 @@ class Go2RebounceTrampolineEnvCfg(Go2RebounceEnvCfg):
     scene: TrampolineSceneCfg = TrampolineSceneCfg(num_envs=2048, env_spacing=4.0, replicate_physics=False)
     actions: TrampolineActionsCfg = TrampolineActionsCfg()
     events: TrampolineEventCfg = TrampolineEventCfg()
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.sim.physx.gpu_collision_stack_size = TRAMPOLINE_GPU_COLLISION_STACK_SIZE
 
 
 @configclass

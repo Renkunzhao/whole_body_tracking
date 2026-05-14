@@ -61,7 +61,7 @@ This file is the current architecture map for trampoline-related work in
   ratio, and pin width.
 - Go2 rebounce currently uses 2x2 cooked geometry buckets with thickness
   `0.03/0.10` and simulation resolution `10/20`; Young's modulus is sampled
-  from `(2e4, 8e4)` for resolution 10 and `(8e4, 8e5)` for resolution 20.
+  from `(8e3, 8e4)` for resolution 10 and `(8e4, 8e5)` for resolution 20.
 - RNN/partial-observation training currently uses a temporary valid-apex bonus
   for early discovery; it is disabled after 1000 PPO iterations.
 - Trampoline DR is also delayed until 1000 PPO iterations; early resets use a

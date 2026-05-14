@@ -33,11 +33,11 @@ motor work.
 - Geometry buckets: spawn-time cooked FEM meshes for thickness
   `0.03/0.10` and `simulation_hexahedral_resolution` `10/20`.
 - `youngs_modulus`: log-uniform and conditioned on cooked resolution:
-  `(2.0e4, 8.0e4)` for resolution 10, `(8.0e4, 8.0e5)` for resolution 20.
-- `mass`: uniform `(5.0, 15.0)`.
+  `(8.0e3, 8.0e4)` for resolution 10, `(8.0e4, 8.0e5)` for resolution 20.
+- `mass`: uniform `(10.0, 20.0)`.
 - `dynamic_friction`: uniform `(0.4, 1.2)`.
 - `elasticity_damping`: uniform `(0.01, 0.1)`.
-- `damping_scale`: fixed `1.0`.
+- `damping_scale`: uniform `(0.5, 1.0)`; PhysX requires this to stay in `[0, 1]`.
 - `poissons_ratio`: uniform `(0.25, 0.45)`.
 
 Training starts with fixed trampoline parameters

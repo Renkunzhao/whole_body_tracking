@@ -39,7 +39,9 @@ Current baseline:
   `(0.03/0.10, 10/20)`, with each env assigned one cooked FEM mesh for the
   run;
 - Young's modulus DR is conditioned on cooked simulation resolution:
-  resolution 10 samples `(2e4, 8e4)`, and resolution 20 samples `(8e4, 8e5)`;
+  resolution 10 samples `(8e3, 8e4)`, and resolution 20 samples `(8e4, 8e5)`;
+- `damping_scale` DR must stay within PhysX's `[0, 1]` range; current Go2
+  rebounce uses `(0.5, 1.0)`;
 - teacher task variants expose root position, base linear velocity, and
   normalized true trampoline material/geometry parameters to an instantaneous actor for
   privileged upper-bound/RMA experiments;
@@ -67,9 +69,13 @@ Near-term experiments:
 ## Work Log
 
 - `YYYY-MM-DD`: Add new entries here in reverse chronological order.
+- `2026-05-14`: Fixed two PhysX limits exposed by resolution-20 trampoline
+  training: `damping_scale` is clamped/configured inside the valid `[0, 1]`
+  interval, and trampoline rebounce raises PhysX `gpu_collision_stack_size` to
+  `2**28` for contact-rich soft-body scenes.
 - `2026-05-14`: Changed Go2 rebounce geometry DR to the 2x2 bucket set
   `thickness in {0.03, 0.10}` x `simulation_hexahedral_resolution in {10, 20}`
-  and made Young's modulus DR resolution-conditioned: `(2e4, 8e4)` for
+  and made Young's modulus DR resolution-conditioned: `(8e3, 8e4)` for
   resolution 10 and `(8e4, 8e5)` for resolution 20.
 - `2026-05-14`: Added true spawn-time trampoline geometry buckets. Go2 rebounce
   now cycles cooked FEM meshes across envs with

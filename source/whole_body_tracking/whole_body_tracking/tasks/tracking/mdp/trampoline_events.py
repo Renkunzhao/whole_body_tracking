@@ -346,6 +346,11 @@ class RandomizeTrampolineProperties(ManagerTermBase):
             self._last_elasticity_dampings[env_ids_tensor] = elasticity_dampings
 
         if damping_scale_range is not None:
+            if damping_scale_range[0] < 0.0 or damping_scale_range[1] > 1.0:
+                raise ValueError(
+                    "PhysX deformable damping_scale must be in [0.0, 1.0], "
+                    f"got range {damping_scale_range}."
+                )
             damping_scales = sample_uniform(
                 damping_scale_range[0],
                 damping_scale_range[1],
