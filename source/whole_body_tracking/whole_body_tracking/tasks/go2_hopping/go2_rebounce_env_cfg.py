@@ -59,16 +59,16 @@ TRAMPOLINE_FIXED_DYNAMIC_FRICTION_RANGE = (0.8, 0.8)
 TRAMPOLINE_FIXED_ELASTICITY_DAMPING_RANGE = (0.02, 0.02)
 TRAMPOLINE_FIXED_DAMPING_SCALE_RANGE = (1.0, 1.0)
 TRAMPOLINE_FIXED_POISSONS_RATIO_RANGE = (0.35, 0.35)
-REBOUNCE_HEIGHT_RANGE = (0.5, 1.2)
-TRAMPOLINE_DR_YOUNGS_MODULUS_RANGE = (2.0e4, 8.0e4)
-TRAMPOLINE_DR_MASS_RANGE = (5.0, 15.0)
+REBOUNCE_HEIGHT_RANGE = (0.5, 0.5)
+TRAMPOLINE_DR_YOUNGS_MODULUS_RANGE = (8.0e3, 8.0e4)
+TRAMPOLINE_DR_MASS_RANGE = (5.0, 10.0)
 TRAMPOLINE_DR_DYNAMIC_FRICTION_RANGE = (0.4, 1.2)
 TRAMPOLINE_DR_ELASTICITY_DAMPING_RANGE = (0.01, 0.1)
 TRAMPOLINE_DR_DAMPING_SCALE_RANGE = (1.0, 1.0)
 TRAMPOLINE_DR_POISSONS_RATIO_RANGE = (0.25, 0.45)
 
 # Delay energy optimization until after robust hopping and trampoline adaptation are learned.
-ENERGY_PENALTY_START_STEP = 5000 * 24
+# ENERGY_PENALTY_START_STEP = 5000 * 24
 
 
 GO2_HOPPING_CFG = get_go2_cfg(
@@ -407,7 +407,7 @@ class RewardsCfg:
     )
     rebounce_height = RewTerm(
         func=mdp.rebounce_height_tracking_exp,
-        weight=50.0,
+        weight=0.0,
         params={
             "command_name": "hop",
             "std": 0.10,
@@ -416,7 +416,7 @@ class RewardsCfg:
     )
     rebounce_height_cycle_normalized = RewTerm(
         func=mdp.rebounce_height_tracking_cycle_normalized_exp,
-        weight=0.0,
+        weight=1.0,
         params={
             "command_name": "hop",
             "std": 0.10,
@@ -519,14 +519,14 @@ class CurriculumCfg:
             "num_steps": HOPPING_INIT_STEP,
         },
     )
-    enable_energy_penalty = CurrTerm(
-        func=modify_reward_weight,
-        params={
-            "term_name": "energy_penalty",
-            "weight": -1.5e-2,
-            "num_steps": ENERGY_PENALTY_START_STEP,
-        },
-    )
+    # enable_energy_penalty = CurrTerm(
+    #     func=modify_reward_weight,
+    #     params={
+    #         "term_name": "energy_penalty",
+    #         "weight": -1.5e-2,
+    #         "num_steps": ENERGY_PENALTY_START_STEP,
+    #     },
+    # )
 
 
 ##
