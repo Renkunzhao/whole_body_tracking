@@ -102,13 +102,13 @@
       "id": "rebounce_target_height",
       "type": "promptString",
       "description": "Type rebounce target height",
-      "default": "0.7"
+      "default": "0.5"
     },
     {
       "id": "rebounce_drop_height",
       "type": "promptString",
       "description": "Type rebounce reset drop height",
-      "default": "0.85"
+      "default": "0.5"
     },
     {
       "id": "trampoline_youngs_modulus",
@@ -120,7 +120,7 @@
       "id": "trampoline_mass",
       "type": "promptString",
       "description": "Type trampoline mass",
-      "default": "10.0"
+      "default": "5.0"
     },
     {
       "id": "trampoline_dynamic_friction",
@@ -132,7 +132,7 @@
       "id": "trampoline_elasticity_damping",
       "type": "promptString",
       "description": "Type trampoline elasticity damping",
-      "default": "0.1"
+      "default": "0.02"
     },
     {
       "id": "trampoline_damping_scale",

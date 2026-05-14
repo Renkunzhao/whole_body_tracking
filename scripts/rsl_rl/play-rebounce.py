@@ -5,12 +5,17 @@
 import argparse
 import csv
 import math
+import os
 import sys
 
 from isaaclab.app import AppLauncher
 
 # local imports
 import cli_args  # isort: skip
+
+SCRIPTS_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
+if SCRIPTS_DIR not in sys.path:
+    sys.path.insert(0, SCRIPTS_DIR)
 
 # add argparse arguments
 parser = argparse.ArgumentParser(description="Play an RL agent with RSL-RL.")
@@ -25,12 +30,6 @@ parser.add_argument("--damping_scale", type=float, default=None, help="Fix tramp
 parser.add_argument("--poissons_ratio", type=float, default=None, help="Fix trampoline Poisson's ratio during play.")
 parser.add_argument("--video", action="store_true", default=False, help="Record a real-time video of the play loop.")
 parser.add_argument("--video_length", type=int, default=500, help="Length of the recorded video (in env steps).")
-parser.add_argument(
-    "--no_joint_vel_csv",
-    action="store_true",
-    default=False,
-    help="Disable the default per-step joint velocity CSV log.",
-)
 # append RSL-RL cli arguments
 cli_args.add_rsl_rl_args(parser)
 # append AppLauncher cli args
@@ -50,7 +49,6 @@ simulation_app = app_launcher.app
 """Rest everything follows."""
 
 import gymnasium as gym
-import os
 import torch
 
 from rsl_rl.runners import DistillationRunner, OnPolicyRunner
@@ -69,6 +67,7 @@ from isaaclab_tasks.utils.hydra import hydra_task_config
 
 # Import extensions to set up environment tasks
 import whole_body_tracking.tasks  # noqa: F401
+from analyze_rebounce_play import analyze_rebounce_play
 from whole_body_tracking.sensors import create_dob_contact_sensor, get_or_create_dob_contact_sensor
 from whole_body_tracking.utils.exporter import attach_onnx_metadata, get_policy_export_normalizer
 from whole_body_tracking.utils.task_utils import apply_play_overrides
@@ -145,13 +144,15 @@ def _print_trampoline_params(env, reset_count: int):
     print(f"[TRAMP R{reset_count:03d}] " + " ".join(parts), flush=True)
 
 
-class JointVelocityCsvLogger:
-    """Temporary play logger for joint-velocity deadbands and DOB contact-force checks."""
+class RebouncePlayCsvLogger:
+    """Temporary play logger for rebounce diagnostics."""
 
     def __init__(self, env, hop_command, csv_path: str, contact_sensors: dict[str, object] | None = None):
         self.env = env
         self.hop_command = hop_command
         self.robot = env.unwrapped.scene["robot"]
+        self.trampoline = self._get_trampoline_asset()
+        self.trampoline_center_node_id = self._resolve_trampoline_center_node_id()
         self.csv_path = os.path.abspath(os.path.expanduser(csv_path))
         self.contact_sensors = contact_sensors or {}
         self.contact_sensor_labels = tuple(self.contact_sensors.keys())
@@ -159,7 +160,7 @@ class JointVelocityCsvLogger:
         self._file = open(self.csv_path, "w", newline="")
         self._writer = csv.writer(self._file)
         self._write_header()
-        print(f"[INFO]: Logging joint velocities and DOB contact forces to {self.csv_path}", flush=True)
+        print(f"[INFO]: Logging rebounce play data to {self.csv_path}", flush=True)
 
     def _write_header(self):
         header = [
@@ -174,6 +175,8 @@ class JointVelocityCsvLogger:
             "root_vz",
             "min_foot_z",
             "max_foot_z",
+            "trampoline_center/z",
+            "trampoline_center/vz",
         ]
         for label in self.contact_sensor_labels:
             header.append(f"contact_force/{label}/valid")
@@ -196,6 +199,33 @@ class JointVelocityCsvLogger:
             return float("nan"), float("nan")
         foot_z_local = foot_asset.data.body_pos_w[0, foot_body_ids, 2] - self.env.unwrapped.scene.env_origins[0, 2]
         return float(torch.min(foot_z_local).item()), float(torch.max(foot_z_local).item())
+
+    def _get_trampoline_asset(self):
+        try:
+            return self.env.unwrapped.scene["trampoline"]
+        except (KeyError, AttributeError):
+            return None
+
+    def _resolve_trampoline_center_node_id(self) -> int | None:
+        if self.trampoline is None:
+            return None
+        default_nodal_state = getattr(self.trampoline.data, "default_nodal_state_w", None)
+        if default_nodal_state is None:
+            return None
+        nodal_pos = default_nodal_state[0, :, :3]
+        center_xy = nodal_pos[:, :2].mean(dim=0, keepdim=True)
+        radial_distance = torch.linalg.vector_norm(nodal_pos[:, :2] - center_xy, dim=-1)
+        return int(torch.argmin(radial_distance).item())
+
+    def _trampoline_center_z_values(self) -> tuple[float, float]:
+        if self.trampoline is None or self.trampoline_center_node_id is None:
+            return float("nan"), float("nan")
+        try:
+            center_z = self.trampoline.data.nodal_pos_w[0, self.trampoline_center_node_id, 2]
+            center_vz = self.trampoline.data.nodal_vel_w[0, self.trampoline_center_node_id, 2]
+        except (AttributeError, IndexError, RuntimeError):
+            return float("nan"), float("nan")
+        return float(center_z.item()), float(center_vz.item())
 
     def _contact_sensor_values(self, sensor) -> list[str]:
         nan_values = ["nan"] * (1 + 3 + 3 * len(CONTACT_FORCE_FOOT_NAMES))
@@ -228,6 +258,7 @@ class JointVelocityCsvLogger:
     def record(self, global_step: int, episode: int, sim_time_s: float):
         is_air, feet_below_clearance = self._air_flags()
         min_foot_z, max_foot_z = self._foot_z_range()
+        trampoline_center_z, trampoline_center_vz = self._trampoline_center_z_values()
         episode_step = int(self.env.unwrapped.episode_length_buf[0].item())
         root_z = float(self.robot.data.root_pos_w[0, 2].item())
         root_vz = float(self.robot.data.root_lin_vel_w[0, 2].item())
@@ -246,6 +277,8 @@ class JointVelocityCsvLogger:
                 f"{root_vz:.6f}",
                 f"{min_foot_z:.6f}",
                 f"{max_foot_z:.6f}",
+                f"{trampoline_center_z:.6f}",
+                f"{trampoline_center_vz:.6f}",
                 *self._contact_values(),
                 *[f"{value:.6f}" for value in joint_vel],
             ]
@@ -341,9 +374,20 @@ def _video_name_prefix(args, run_id: str) -> str:
     return "_".join(parts)
 
 
-def _joint_vel_csv_path(resume_path: str, name_prefix: str) -> str:
-    folder = os.path.join(os.path.dirname(resume_path), "joint_vel", "play-rebounce")
-    return os.path.join(folder, f"{name_prefix}-step-0_joint_vel.csv")
+def _play_output_dir(resume_path: str, name_prefix: str) -> str:
+    return os.path.join(os.path.dirname(os.path.abspath(resume_path)), "play-rebounce", name_prefix)
+
+
+def _play_csv_path(play_output_dir: str) -> str:
+    return os.path.join(play_output_dir, "rebounce_play.csv")
+
+
+def _run_rebounce_play_analysis(csv_path: str, output_dir: str) -> None:
+    print(f"[INFO]: Running rebounce play analysis in {output_dir}", flush=True)
+    try:
+        analyze_rebounce_play(csv_path, output_dir)
+    except Exception as exc:
+        print(f"[WARN]: Rebounce play analysis failed: {exc}", flush=True)
 
 
 def _download_checkpoint_from_wandb(wandb_path: str) -> str:
@@ -497,6 +541,8 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
     run_id = _run_id_for_video(args_cli.wandb_path, resume_path)
     name_prefix = _video_name_prefix(args_cli, run_id)
+    play_output_dir = _play_output_dir(resume_path, name_prefix)
+    os.makedirs(play_output_dir, exist_ok=True)
 
     # create isaac environment
     env = gym.make(
@@ -507,17 +553,18 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
     # wrap with RecordVideo on the raw gym env, before RL-specific wrappers
     if args_cli.video:
-        video_folder = os.path.join(os.path.dirname(resume_path), "videos", "play-rebounce")
+        video_folder = play_output_dir
+        video_name_prefix = "rebounce_play"
         video_kwargs = {
             "video_folder": video_folder,
             "step_trigger": lambda step: step == 0,
             "video_length": args_cli.video_length,
-            "name_prefix": name_prefix,
+            "name_prefix": video_name_prefix,
             "disable_logger": True,
         }
         step_dt_estimate = float(env_cfg.sim.dt) * int(env_cfg.decimation)
         print(
-            f"[INFO]: Recording video -> {video_folder}/{name_prefix}-step-0.mp4 "
+            f"[INFO]: Recording video -> {video_folder}/{video_name_prefix}-step-0.mp4 "
             f"({args_cli.video_length} steps = {args_cli.video_length * step_dt_estimate:.2f}s).",
             flush=True,
         )
@@ -572,12 +619,8 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         f"gpu columns use backend={getattr(gpu_dob_sensor, 'dob_backend', 'unknown')}",
         flush=True,
     )
-    joint_vel_csv_path = _joint_vel_csv_path(resume_path, name_prefix)
-    joint_vel_logger = (
-        None
-        if args_cli.no_joint_vel_csv
-        else JointVelocityCsvLogger(env, hop_command, joint_vel_csv_path, contact_sensors=contact_sensors)
-    )
+    play_csv_path = _play_csv_path(play_output_dir)
+    play_logger = RebouncePlayCsvLogger(env, hop_command, play_csv_path, contact_sensors=contact_sensors)
     play_step_count = 0
     sim_step_dt = float(env.unwrapped.step_dt)
     video_step_count = 0
@@ -593,8 +636,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             play_step_count += 1
             for sensor in contact_sensors.values():
                 sensor.update()
-            if joint_vel_logger is not None:
-                joint_vel_logger.record(play_step_count, episode_count, play_step_count * sim_step_dt)
+            play_logger.record(play_step_count, episode_count, play_step_count * sim_step_dt)
 
             if hop_command is not None and bool(hop_command.is_apex[0]):
                 apex_count += 1
@@ -646,9 +688,9 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     except KeyboardInterrupt:
         print("[INFO]: Interrupted by user. Finalizing video (if recording) before exit...", flush=True)
     finally:
-        if joint_vel_logger is not None:
-            joint_vel_logger.close()
+        play_logger.close()
         env.close()
+        _run_rebounce_play_analysis(play_csv_path, play_output_dir)
 
 
 if __name__ == "__main__":
