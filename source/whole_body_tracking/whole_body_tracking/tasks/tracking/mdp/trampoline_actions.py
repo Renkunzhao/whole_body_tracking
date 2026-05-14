@@ -9,7 +9,11 @@ from isaaclab.managers.action_manager import ActionTerm
 from isaaclab.managers.manager_term_cfg import ActionTermCfg
 from isaaclab.utils import configclass
 
-from whole_body_tracking.utils.trampoline_deformable import TRAMPOLINE_PIN_WIDTH, build_trampoline_kinematic_targets
+from whole_body_tracking.utils.trampoline_deformable import (
+    TRAMPOLINE_PIN_WIDTH,
+    build_trampoline_kinematic_targets,
+    build_trampoline_sim_node_mask,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +29,8 @@ class TrampolinePinningAction(ActionTerm):
         self._export_IO_descriptor = False
         self._raw_actions = torch.zeros((self.num_envs, 0), device=self.device)
         self._processed_actions = torch.zeros_like(self._raw_actions)
-        self._pin_width = cfg.pin_width
+        self._pin_widths = torch.full((self.num_envs,), float(cfg.pin_width), device=self.device, dtype=torch.float32)
+        self._valid_node_mask = build_trampoline_sim_node_mask(self._asset)
         self._targets = torch.zeros_like(self._asset.data.nodal_kinematic_target)
         self._pinned_mask = torch.zeros_like(self._asset.data.nodal_kinematic_target[..., 3], dtype=torch.bool)
         self._center_node_ids = torch.zeros((self.num_envs,), device=self.device, dtype=torch.long)
@@ -54,8 +59,16 @@ class TrampolinePinningAction(ActionTerm):
         return self._pinned_mask
 
     @property
+    def pin_widths(self) -> torch.Tensor:
+        return self._pin_widths
+
+    @property
     def center_node_ids(self) -> torch.Tensor:
         return self._center_node_ids
+
+    @property
+    def valid_node_mask(self) -> torch.Tensor:
+        return self._valid_node_mask
 
     def process_actions(self, actions: torch.Tensor):
         self._raw_actions = actions.to(self.device)
@@ -69,17 +82,40 @@ class TrampolinePinningAction(ActionTerm):
     def apply_actions(self):
         self.write_targets()
 
+    def set_pin_widths(self, pin_widths: torch.Tensor, env_ids: Sequence[int] | None = None) -> None:
+        env_ids_tensor = self._resolve_env_ids(env_ids)
+        values = torch.as_tensor(pin_widths, device=self.device, dtype=torch.float32).reshape(-1)
+        if env_ids_tensor is None:
+            if values.numel() == 1:
+                values = values.expand(self.num_envs)
+            if values.numel() != self.num_envs:
+                raise ValueError(f"Expected {self.num_envs} pin widths, got {values.numel()}.")
+            self._pin_widths[:] = values
+        else:
+            if values.numel() == 1:
+                values = values.expand(env_ids_tensor.numel())
+            if values.numel() != env_ids_tensor.numel():
+                raise ValueError(f"Expected {env_ids_tensor.numel()} pin widths, got {values.numel()}.")
+            self._pin_widths[env_ids_tensor] = values
+        self.refresh_targets(env_ids)
+        self.write_targets(env_ids)
+
     def refresh_targets(self, env_ids: Sequence[int] | None = None) -> None:
         env_ids_tensor = self._resolve_env_ids(env_ids)
         if env_ids_tensor is None:
             index = slice(None)
+            pin_widths = self._pin_widths
+            valid_node_mask = self._valid_node_mask
         else:
             index = env_ids_tensor
+            pin_widths = self._pin_widths[env_ids_tensor]
+            valid_node_mask = self._valid_node_mask[env_ids_tensor]
 
         targets, pinned_mask, center_node_ids = build_trampoline_kinematic_targets(
             self._asset.data.default_nodal_state_w[index],
             self._asset.data.nodal_kinematic_target[index],
-            pin_width=self._pin_width,
+            pin_width=pin_widths,
+            valid_node_mask=valid_node_mask,
         )
         self._targets[index] = targets
         self._pinned_mask[index] = pinned_mask

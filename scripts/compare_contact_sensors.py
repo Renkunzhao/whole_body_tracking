@@ -144,6 +144,7 @@ def _set_fixed_condition(env_cfg):
         params["randomization_start_step"] = 0
         if args_cli.youngs_modulus is not None:
             params["youngs_modulus_range"] = (args_cli.youngs_modulus, args_cli.youngs_modulus)
+            params.pop("youngs_modulus_range_by_sim_resolution", None)
             params["youngs_modulus_distribution"] = "uniform"
         if args_cli.trampoline_mass is not None:
             params["mass_range"] = (args_cli.trampoline_mass, args_cli.trampoline_mass)

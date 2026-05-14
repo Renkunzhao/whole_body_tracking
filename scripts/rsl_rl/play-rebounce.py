@@ -28,8 +28,17 @@ parser.add_argument("--dynamic_friction", type=float, default=None, help="Fix tr
 parser.add_argument("--elasticity_damping", type=float, default=None, help="Fix trampoline elasticity damping during play.")
 parser.add_argument("--damping_scale", type=float, default=None, help="Fix trampoline damping scale during play.")
 parser.add_argument("--poissons_ratio", type=float, default=None, help="Fix trampoline Poisson's ratio during play.")
+parser.add_argument("--pin_width", type=float, default=None, help="Fix trampoline pin width during play.")
+parser.add_argument("--trampoline_thickness", type=float, default=None, help="Fix trampoline mesh thickness during play.")
+parser.add_argument("--trampoline_sim_resolution", type=int, default=None, help="Fix trampoline FEM hex resolution during play.")
 parser.add_argument("--video", action="store_true", default=False, help="Record a real-time video of the play loop.")
 parser.add_argument("--video_length", type=int, default=500, help="Length of the recorded video (in env steps).")
+parser.add_argument(
+    "--hide_trampoline_nodes",
+    action="store_true",
+    default=False,
+    help="Hide pinned/free trampoline node markers in the viewer.",
+)
 # append RSL-RL cli arguments
 cli_args.add_rsl_rl_args(parser)
 # append AppLauncher cli args
@@ -71,6 +80,16 @@ from analyze_rebounce_play import analyze_rebounce_play
 from whole_body_tracking.sensors import create_dob_contact_sensor, get_or_create_dob_contact_sensor
 from whole_body_tracking.utils.exporter import attach_onnx_metadata, get_policy_export_normalizer
 from whole_body_tracking.utils.task_utils import apply_play_overrides
+from whole_body_tracking.utils.trampoline_deformable import (
+    TRAMPOLINE_SIM_RESOLUTION,
+    TRAMPOLINE_THICKNESS,
+    build_trampoline_kinematic_targets,
+    build_trampoline_node_visualizers,
+    build_trampoline_sim_node_mask,
+    make_trampoline_bucket_cfg,
+    resolve_trampoline_center_node_ids,
+    update_trampoline_node_visualizers,
+)
 
 
 CONTACT_FORCE_FOOT_NAMES = ("FL_foot", "FR_foot", "RL_foot", "RR_foot")
@@ -141,7 +160,52 @@ def _print_trampoline_params(env, reset_count: int):
     _maybe_print_property(parts, randomizer, "last_elasticity_dampings", "damp", ".3f")
     _maybe_print_property(parts, randomizer, "last_damping_scales", "ds", ".2f")
     _maybe_print_property(parts, randomizer, "last_poissons_ratios", "nu", ".2f")
+    _maybe_print_property(parts, randomizer, "last_pin_widths", "pin", ".3f")
+    _maybe_print_property(parts, randomizer, "trampoline_thicknesses", "thick", ".3f")
+    _maybe_print_property(parts, randomizer, "trampoline_sim_resolutions", "res", ".0f")
     print(f"[TRAMP R{reset_count:03d}] " + " ".join(parts), flush=True)
+
+
+def _setup_trampoline_node_visualization(env):
+    if args_cli.hide_trampoline_nodes:
+        return None
+    try:
+        trampoline = env.unwrapped.scene["trampoline"]
+    except (KeyError, AttributeError):
+        return None
+
+    try:
+        valid_node_mask = build_trampoline_sim_node_mask(trampoline)
+        _, pinned_mask, _ = build_trampoline_kinematic_targets(
+            trampoline.data.default_nodal_state_w,
+            trampoline.data.nodal_kinematic_target,
+            valid_node_mask=valid_node_mask,
+        )
+        pinned_visualizer, free_visualizer = build_trampoline_node_visualizers()
+    except (AttributeError, RuntimeError) as exc:
+        print(f"[WARN]: Failed to initialize trampoline node markers: {exc}", flush=True)
+        return None
+
+    env0_mask = pinned_mask[0]
+    env0_valid = valid_node_mask[0]
+    default_pos = trampoline.data.default_nodal_state_w[0, env0_valid, :3].detach()
+    z_layers_mm = torch.unique(torch.round(default_pos[:, 2] * 1000.0)).detach().cpu().tolist()
+    pinned_count = int(env0_mask.sum().item())
+    free_count = int((env0_valid & ~env0_mask).sum().item())
+    print(
+        f"[INFO]: Trampoline node markers enabled: pinned={pinned_count}, free={free_count}, "
+        f"z_layers={len(z_layers_mm)}",
+        flush=True,
+    )
+    update_trampoline_node_visualizers(trampoline, pinned_mask, pinned_visualizer, free_visualizer, valid_node_mask)
+    return trampoline, pinned_mask, pinned_visualizer, free_visualizer, valid_node_mask
+
+
+def _update_trampoline_node_visualization(runtime) -> None:
+    if runtime is None:
+        return
+    trampoline, pinned_mask, pinned_visualizer, free_visualizer, valid_node_mask = runtime
+    update_trampoline_node_visualizers(trampoline, pinned_mask, pinned_visualizer, free_visualizer, valid_node_mask)
 
 
 class RebouncePlayCsvLogger:
@@ -152,7 +216,7 @@ class RebouncePlayCsvLogger:
         self.hop_command = hop_command
         self.robot = env.unwrapped.scene["robot"]
         self.trampoline = self._get_trampoline_asset()
-        self.trampoline_center_node_id = self._resolve_trampoline_center_node_id()
+        self.trampoline_center_node_ids = self._resolve_trampoline_center_node_ids()
         self.csv_path = os.path.abspath(os.path.expanduser(csv_path))
         self.contact_sensors = contact_sensors or {}
         self.contact_sensor_labels = tuple(self.contact_sensors.keys())
@@ -228,23 +292,22 @@ class RebouncePlayCsvLogger:
         except (KeyError, AttributeError):
             return None
 
-    def _resolve_trampoline_center_node_id(self) -> int | None:
+    def _resolve_trampoline_center_node_ids(self) -> torch.Tensor | None:
         if self.trampoline is None:
             return None
         default_nodal_state = getattr(self.trampoline.data, "default_nodal_state_w", None)
         if default_nodal_state is None:
             return None
-        nodal_pos = default_nodal_state[0, :, :3]
-        center_xy = nodal_pos[:, :2].mean(dim=0, keepdim=True)
-        radial_distance = torch.linalg.vector_norm(nodal_pos[:, :2] - center_xy, dim=-1)
-        return int(torch.argmin(radial_distance).item())
+        valid_node_mask = build_trampoline_sim_node_mask(self.trampoline)
+        return resolve_trampoline_center_node_ids(default_nodal_state, valid_node_mask)
 
     def _trampoline_center_z_values(self) -> tuple[float, float]:
-        if self.trampoline is None or self.trampoline_center_node_id is None:
+        if self.trampoline is None or self.trampoline_center_node_ids is None:
             return float("nan"), float("nan")
         try:
-            center_z = self.trampoline.data.nodal_pos_w[0, self.trampoline_center_node_id, 2]
-            center_vz = self.trampoline.data.nodal_vel_w[0, self.trampoline_center_node_id, 2]
+            center_node_id = int(self.trampoline_center_node_ids[0].item())
+            center_z = self.trampoline.data.nodal_pos_w[0, center_node_id, 2]
+            center_vz = self.trampoline.data.nodal_vel_w[0, center_node_id, 2]
         except (AttributeError, IndexError, RuntimeError):
             return float("nan"), float("nan")
         return float(center_z.item()), float(center_vz.item())
@@ -367,6 +430,7 @@ def _set_fixed_play_condition(env_cfg):
         params["randomization_start_step"] = 0
         if args_cli.youngs_modulus is not None:
             params["youngs_modulus_range"] = (args_cli.youngs_modulus, args_cli.youngs_modulus)
+            params.pop("youngs_modulus_range_by_sim_resolution", None)
             params["youngs_modulus_distribution"] = "uniform"
         if args_cli.trampoline_mass is not None:
             params["mass_range"] = (args_cli.trampoline_mass, args_cli.trampoline_mass)
@@ -378,6 +442,27 @@ def _set_fixed_play_condition(env_cfg):
             params["damping_scale_range"] = (args_cli.damping_scale, args_cli.damping_scale)
         if args_cli.poissons_ratio is not None:
             params["poissons_ratio_range"] = (args_cli.poissons_ratio, args_cli.poissons_ratio)
+        if args_cli.pin_width is not None:
+            params["pin_width_range"] = (args_cli.pin_width, args_cli.pin_width)
+
+    # Thickness and sim_resolution are spawn-time geometry buckets, not reset-time DR.
+    # Collapse the bucket list to a single (thickness, resolution) before scene spawn.
+    scene = getattr(env_cfg, "scene", None)
+    if scene is not None and hasattr(scene, "trampoline") and (
+        args_cli.trampoline_thickness is not None or args_cli.trampoline_sim_resolution is not None
+    ):
+        thickness = (
+            args_cli.trampoline_thickness if args_cli.trampoline_thickness is not None else TRAMPOLINE_THICKNESS
+        )
+        sim_resolution = (
+            args_cli.trampoline_sim_resolution
+            if args_cli.trampoline_sim_resolution is not None
+            else TRAMPOLINE_SIM_RESOLUTION
+        )
+        scene.trampoline = make_trampoline_bucket_cfg(
+            scene.trampoline.prim_path,
+            geometry_buckets=((float(thickness), int(sim_resolution)),),
+        )
 
     return env_cfg
 
@@ -403,6 +488,9 @@ def _video_name_prefix(args, run_id: str) -> str:
         ("elasticity_damping", "damp", ".3f"),
         ("damping_scale", "ds", ".2f"),
         ("poissons_ratio", "nu", ".2f"),
+        ("pin_width", "pin", ".3f"),
+        ("trampoline_thickness", "thick", ".3f"),
+        ("trampoline_sim_resolution", "res", ".0f"),
     ]
     for attr, label, fmt in keys:
         value = getattr(args, attr, None)
@@ -418,6 +506,15 @@ def _play_output_dir(resume_path: str, name_prefix: str) -> str:
 
 def _play_csv_path(play_output_dir: str) -> str:
     return os.path.join(play_output_dir, "rebounce_play.csv")
+
+
+def _unique_video_name_prefix(video_folder: str, base_prefix: str) -> str:
+    candidate = base_prefix
+    index = 1
+    while os.path.exists(os.path.join(video_folder, f"{candidate}-step-0.mp4")):
+        candidate = f"{base_prefix}_{index:03d}"
+        index += 1
+    return candidate
 
 
 def _run_rebounce_play_analysis(csv_path: str, output_dir: str) -> None:
@@ -592,7 +689,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     # wrap with RecordVideo on the raw gym env, before RL-specific wrappers
     if args_cli.video:
         video_folder = play_output_dir
-        video_name_prefix = "rebounce_play"
+        video_name_prefix = _unique_video_name_prefix(video_folder, "rebounce_play")
         video_kwargs = {
             "video_folder": video_folder,
             "step_trigger": lambda step: step == 0,
@@ -640,6 +737,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
     obs, _ = env.reset()
     hop_command, energy_command = _get_rebounce_debug_handles(env)
+    trampoline_node_visualization = _setup_trampoline_node_visualization(env)
     reset_count = 0
     _print_trampoline_params(env, reset_count)
     apex_count = 0
@@ -672,6 +770,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
                 actions = policy(obs)
             obs, _, dones, _ = env.step(actions)
             play_step_count += 1
+            _update_trampoline_node_visualization(trampoline_node_visualization)
             for sensor in contact_sensors.values():
                 sensor.update()
             play_logger.record(play_step_count, episode_count, play_step_count * sim_step_dt)

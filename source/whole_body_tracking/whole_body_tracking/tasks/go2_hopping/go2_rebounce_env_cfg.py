@@ -36,7 +36,10 @@ from whole_body_tracking.tasks.tracking.mdp import (
     TrampolinePinningActionCfg,
     reapply_trampoline_pinning,
 )
-from whole_body_tracking.utils.trampoline_deformable import make_trampoline_cfg
+from whole_body_tracking.utils.trampoline_deformable import (
+    TRAMPOLINE_PIN_WIDTH,
+    make_trampoline_bucket_cfg,
+)
 
 ##
 # Scene definition
@@ -59,13 +62,24 @@ TRAMPOLINE_FIXED_DYNAMIC_FRICTION_RANGE = (0.8, 0.8)
 TRAMPOLINE_FIXED_ELASTICITY_DAMPING_RANGE = (0.02, 0.02)
 TRAMPOLINE_FIXED_DAMPING_SCALE_RANGE = (1.0, 1.0)
 TRAMPOLINE_FIXED_POISSONS_RATIO_RANGE = (0.35, 0.35)
+TRAMPOLINE_FIXED_PIN_WIDTH_RANGE = (0.4, 0.4)
 REBOUNCE_HEIGHT_RANGE = (0.5, 0.5)
-TRAMPOLINE_DR_YOUNGS_MODULUS_RANGE = (8.0e3, 8.0e4)
-TRAMPOLINE_DR_MASS_RANGE = (5.0, 10.0)
+TRAMPOLINE_DR_YOUNGS_MODULUS_RANGE_BY_SIM_RESOLUTION = {
+    "10": (8.0e3, 8.0e4),
+    "20": (8.0e4, 8.0e5),
+}
+TRAMPOLINE_DR_MASS_RANGE = (10.0, 20.0)
 TRAMPOLINE_DR_DYNAMIC_FRICTION_RANGE = (0.4, 1.2)
 TRAMPOLINE_DR_ELASTICITY_DAMPING_RANGE = (0.01, 0.1)
-TRAMPOLINE_DR_DAMPING_SCALE_RANGE = (1.0, 1.0)
+TRAMPOLINE_DR_DAMPING_SCALE_RANGE = (0.5, 2.0)
 TRAMPOLINE_DR_POISSONS_RATIO_RANGE = (0.25, 0.45)
+TRAMPOLINE_DR_PIN_WIDTH_RANGE = (0.3, 0.5)
+TRAMPOLINE_GEOMETRY_BUCKETS = (
+    (0.03, 10),
+    (0.10, 10),
+    (0.03, 20),
+    (0.10, 20),
+)
 
 # Delay energy optimization until after robust hopping and trampoline adaptation are learned.
 # ENERGY_PENALTY_START_STEP = 5000 * 24
@@ -395,6 +409,14 @@ class EventCfg:
         },
     )
 
+    # interval
+    push_robot = EventTerm(
+        func=mdp.push_by_setting_velocity,
+        mode="interval",
+        interval_range_s=(1.0, 3.0),
+        params={"velocity_range": VELOCITY_RANGE},
+    )
+
 
 @configclass
 class RewardsCfg:
@@ -595,7 +617,10 @@ class Go2RebounceFlatEnvCfg(Go2RebounceEnvCfg):
 class TrampolineSceneCfg(MySceneCfg):
     """Scene with a deformable trampoline instead of a rigid ground plane."""
 
-    trampoline: DeformableObjectCfg = make_trampoline_cfg("{ENV_REGEX_NS}/Trampoline")
+    trampoline: DeformableObjectCfg = make_trampoline_bucket_cfg(
+        "{ENV_REGEX_NS}/Trampoline",
+        geometry_buckets=TRAMPOLINE_GEOMETRY_BUCKETS,
+    )
 
 
 @configclass
@@ -614,13 +639,14 @@ class TrampolineEventCfg(EventCfg):
         mode="reset",
         params={
             "asset_name": "trampoline",
-            "youngs_modulus_range": TRAMPOLINE_DR_YOUNGS_MODULUS_RANGE,
+            "youngs_modulus_range_by_sim_resolution": TRAMPOLINE_DR_YOUNGS_MODULUS_RANGE_BY_SIM_RESOLUTION,
             "youngs_modulus_distribution": "log_uniform",
             "mass_range": TRAMPOLINE_DR_MASS_RANGE,
             "dynamic_friction_range": TRAMPOLINE_DR_DYNAMIC_FRICTION_RANGE,
             "elasticity_damping_range": TRAMPOLINE_DR_ELASTICITY_DAMPING_RANGE,
             "damping_scale_range": TRAMPOLINE_DR_DAMPING_SCALE_RANGE,
             "poissons_ratio_range": TRAMPOLINE_DR_POISSONS_RATIO_RANGE,
+            "pin_width_range": TRAMPOLINE_DR_PIN_WIDTH_RANGE,
             "randomization_start_step": HOPPING_INIT_STEP,
             "fixed_youngs_modulus_range": TRAMPOLINE_FIXED_YOUNGS_MODULUS_RANGE,
             "fixed_mass_range": TRAMPOLINE_FIXED_MASS_RANGE,
@@ -628,6 +654,7 @@ class TrampolineEventCfg(EventCfg):
             "fixed_elasticity_damping_range": TRAMPOLINE_FIXED_ELASTICITY_DAMPING_RANGE,
             "fixed_damping_scale_range": TRAMPOLINE_FIXED_DAMPING_SCALE_RANGE,
             "fixed_poissons_ratio_range": TRAMPOLINE_FIXED_POISSONS_RATIO_RANGE,
+            "fixed_pin_width_range": TRAMPOLINE_FIXED_PIN_WIDTH_RANGE,
         },
     )
     reapply_trampoline_pinning = EventTerm(func=reapply_trampoline_pinning, mode="reset")

@@ -30,7 +30,10 @@ motor work.
 
 ## Current Trampoline DR
 
-- `youngs_modulus`: log-uniform `(2.0e4, 8.0e4)`.
+- Geometry buckets: spawn-time cooked FEM meshes for thickness
+  `0.03/0.10` and `simulation_hexahedral_resolution` `10/20`.
+- `youngs_modulus`: log-uniform and conditioned on cooked resolution:
+  `(2.0e4, 8.0e4)` for resolution 10, `(8.0e4, 8.0e5)` for resolution 20.
 - `mass`: uniform `(5.0, 15.0)`.
 - `dynamic_friction`: uniform `(0.4, 1.2)`.
 - `elasticity_damping`: uniform `(0.01, 0.1)`.

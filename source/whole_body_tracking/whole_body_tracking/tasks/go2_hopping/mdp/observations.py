@@ -29,12 +29,16 @@ def trampoline_properties(
     dynamic_friction_nominal: float = 0.8,
     dynamic_friction_scale: float = 0.4,
     elasticity_damping_nominal: float = 0.02,
+    thickness_nominal: float = 0.065,
+    thickness_scale: float = 0.035,
+    sim_resolution_nominal: float = 15.0,
+    sim_resolution_scale: float = 5.0,
 ) -> torch.Tensor:
-    """Normalized privileged trampoline parameters for teacher policies."""
+    """Normalized privileged trampoline material and cooked-geometry parameters for teacher policies."""
     try:
         randomizer = env.event_manager.get_term_cfg(event_name).func
     except (AttributeError, KeyError, ValueError):
-        return torch.zeros(env.num_envs, 5, device=env.device)
+        return torch.zeros(env.num_envs, 7, device=env.device)
 
     def _value(name: str, default: float) -> torch.Tensor:
         value = getattr(randomizer, name, None)
@@ -47,6 +51,8 @@ def trampoline_properties(
     poissons_ratio = _value("last_poissons_ratios", poissons_ratio_nominal)
     dynamic_friction = _value("last_dynamic_frictions", dynamic_friction_nominal)
     elasticity_damping = _value("last_elasticity_dampings", elasticity_damping_nominal)
+    thickness = _value("trampoline_thicknesses", thickness_nominal)
+    sim_resolution = _value("trampoline_sim_resolutions", sim_resolution_nominal)
 
     return torch.stack(
         (
@@ -55,6 +61,8 @@ def trampoline_properties(
             (poissons_ratio - poissons_ratio_nominal) / poissons_ratio_scale,
             (dynamic_friction - dynamic_friction_nominal) / dynamic_friction_scale,
             torch.log(elasticity_damping.clamp_min(1.0e-6) / elasticity_damping_nominal),
+            (thickness - thickness_nominal) / thickness_scale,
+            (sim_resolution - sim_resolution_nominal) / sim_resolution_scale,
         ),
         dim=-1,
     )

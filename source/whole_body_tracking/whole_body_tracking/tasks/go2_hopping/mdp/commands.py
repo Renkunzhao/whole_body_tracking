@@ -12,6 +12,10 @@ from isaaclab.utils import configclass
 from isaaclab.utils.string import resolve_matching_names_values
 
 from whole_body_tracking.sensors import get_or_create_dob_contact_sensor
+from whole_body_tracking.utils.trampoline_deformable import (
+    build_trampoline_sim_node_mask,
+    resolve_trampoline_center_node_ids,
+)
 
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
@@ -280,7 +284,7 @@ class UniformRebounceCommand(CommandTerm):
             self.trampoline = env.scene[cfg.trampoline_asset_name]
         except KeyError:
             self.trampoline = None
-        self._trampoline_center_node_id = self._resolve_trampoline_center_node_id()
+        self._trampoline_center_node_ids = self._resolve_trampoline_center_node_ids()
         cfg.joint_velocity_asset_cfg.resolve(env.scene)
         self._joint_velocity_asset: Articulation = env.scene[cfg.joint_velocity_asset_cfg.name]
         self._joint_velocity_ids = cfg.joint_velocity_asset_cfg.joint_ids
@@ -437,24 +441,31 @@ class UniformRebounceCommand(CommandTerm):
         threshold = self.cfg.surface_z + (self.cfg.foot_clearance if clearance is None else clearance)
         return min_foot_z > threshold, max_foot_z <= threshold
 
-    def _resolve_trampoline_center_node_id(self) -> int | None:
+    def _resolve_trampoline_center_node_ids(self) -> torch.Tensor | None:
         if self.trampoline is None:
             return None
         default_nodal_state = getattr(self.trampoline.data, "default_nodal_state_w", None)
         if default_nodal_state is None:
             return None
-        nodal_pos = default_nodal_state[0, :, :3]
-        center_xy = nodal_pos[:, :2].mean(dim=0, keepdim=True)
-        radial_distance = torch.linalg.vector_norm(nodal_pos[:, :2] - center_xy, dim=-1)
-        return int(torch.argmin(radial_distance).item())
+        valid_node_mask = build_trampoline_sim_node_mask(self.trampoline)
+        return resolve_trampoline_center_node_ids(default_nodal_state, valid_node_mask).to(
+            device=self.device,
+            dtype=torch.long,
+        )
+
+    def _trampoline_center_values(self, tensor: torch.Tensor) -> torch.Tensor:
+        if self._trampoline_center_node_ids is None:
+            return torch.zeros(self.num_envs, device=self.device)
+        env_ids = torch.arange(self.num_envs, device=self.device, dtype=torch.long)
+        return tensor[env_ids, self._trampoline_center_node_ids, 2].to(device=self.device)
 
     def _compute_trampoline_rest_z(self) -> torch.Tensor:
-        if self.trampoline is None or self._trampoline_center_node_id is None:
+        if self.trampoline is None or self._trampoline_center_node_ids is None:
             return torch.zeros(self.num_envs, device=self.device)
         default_nodal_state = getattr(self.trampoline.data, "default_nodal_state_w", None)
         if default_nodal_state is None:
             return torch.zeros(self.num_envs, device=self.device)
-        return default_nodal_state[:, self._trampoline_center_node_id, 2].to(device=self.device)
+        return self._trampoline_center_values(default_nodal_state)
 
     def _height_matched_apex(self, is_apex: torch.Tensor, height: torch.Tensor) -> torch.Tensor:
         height_ok = torch.abs(height - self.target_apex_height) < self.cfg.apex_height_tolerance
@@ -473,13 +484,13 @@ class UniformRebounceCommand(CommandTerm):
         return torch.where(valid, dob_stance, feet_below_clearance)
 
     def _update_trampoline_phase_flags(self, in_stance: torch.Tensor):
-        if self.trampoline is None or self._trampoline_center_node_id is None:
+        if self.trampoline is None or self._trampoline_center_node_ids is None:
             self._is_max_compression.zero_()
             self._in_compression_phase.zero_()
             self._in_release_phase.zero_()
             return
-        center_z = self.trampoline.data.nodal_pos_w[:, self._trampoline_center_node_id, 2]
-        center_vz = self.trampoline.data.nodal_vel_w[:, self._trampoline_center_node_id, 2]
+        center_z = self._trampoline_center_values(self.trampoline.data.nodal_pos_w)
+        center_vz = self._trampoline_center_values(self.trampoline.data.nodal_vel_w)
         compression = self._trampoline_rest_z - center_z
         compressed = compression > self.cfg.trampoline_compression_threshold
         moving_down = center_vz < -self.cfg.trampoline_phase_velocity_threshold

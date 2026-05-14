@@ -28,6 +28,7 @@ description: Use for all trampoline-related work in whole_body_tracking. Read St
 - Read [task4-phase1-ball-drop.md](task4-phase1-ball-drop.md) for the phase-1 ball-drop prototype and `scripts/trampoline_spring.py`.
 - Read [task4-phase2-interface.md](task4-phase2-interface.md) for play-path integration, `foot_contact`, lower-leg collision removal, and URDF-based collision changes.
 - Read [task5-go2-rebounce.md](task5-go2-rebounce.md) for the current Go2 continuous rebounce task, deformable trampoline DR, eval protocol, and MLP-history/RNN/RMA roadmap.
+- Read [task6-mujoco-deploy.md](task6-mujoco-deploy.md) for Mujoco deploy, IsaacLab-to-Mujoco trampoline gap analysis, sim2sim validation, and phase-aware teacher/student research direction.
 - Treat each `task-*.md` file as one concrete implementation pass or focused design artifact, not the global source of truth.
 - For cross-phase work, read multiple docs as needed, but do not load every markdown file in the directory by default.
 

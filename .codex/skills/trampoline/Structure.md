@@ -55,16 +55,21 @@ This file is the current architecture map for trampoline-related work in
   observations plus recurrent state. The critic remains privileged,
   instantaneous, and full-state with base position, quaternion, and linear
   velocity.
-- The current trampoline DR parameters are Young's modulus, mass, dynamic
-  friction, elasticity damping, damping scale, and Poisson ratio.
+- The current trampoline DR parameters are spawn-time geometry buckets
+  `(thickness, simulation_hexahedral_resolution)` plus reset-time Young's
+  modulus, mass, dynamic friction, elasticity damping, damping scale, Poisson
+  ratio, and pin width.
+- Go2 rebounce currently uses 2x2 cooked geometry buckets with thickness
+  `0.03/0.10` and simulation resolution `10/20`; Young's modulus is sampled
+  from `(2e4, 8e4)` for resolution 10 and `(8e4, 8e5)` for resolution 20.
 - RNN/partial-observation training currently uses a temporary valid-apex bonus
   for early discovery; it is disabled after 1000 PPO iterations.
 - Trampoline DR is also delayed until 1000 PPO iterations; early resets use a
   fixed trampoline before the reset event begins sampling the DR ranges.
 - Teacher variants append root position, base linear velocity, and normalized
-  true trampoline parameters to instantaneous actor observations as privileged
-  upper bounds/RMA teachers; deployable actors should not use these terms
-  directly.
+  true trampoline material/geometry parameters to instantaneous actor
+  observations as privileged upper bounds/RMA teachers; deployable actors
+  should not use these terms directly.
 
 ## Evaluation State
 

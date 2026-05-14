@@ -296,6 +296,7 @@ def _set_condition(env, condition: dict[str, float | str]):
     except ValueError:
         return
     trampoline_cfg.params["youngs_modulus_range"] = (youngs_modulus, youngs_modulus)
+    trampoline_cfg.params.pop("youngs_modulus_range_by_sim_resolution", None)
     trampoline_cfg.params["youngs_modulus_distribution"] = "uniform"
     trampoline_cfg.params["mass_range"] = (mass, mass)
     trampoline_cfg.params["dynamic_friction_range"] = (dynamic_friction, dynamic_friction)
@@ -306,6 +307,7 @@ def _set_condition(env, condition: dict[str, float | str]):
     if hasattr(unwrapped.cfg.events, "randomize_trampoline_properties"):
         params = unwrapped.cfg.events.randomize_trampoline_properties.params
         params["youngs_modulus_range"] = (youngs_modulus, youngs_modulus)
+        params.pop("youngs_modulus_range_by_sim_resolution", None)
         params["youngs_modulus_distribution"] = "uniform"
         params["mass_range"] = (mass, mass)
         params["dynamic_friction_range"] = (dynamic_friction, dynamic_friction)
