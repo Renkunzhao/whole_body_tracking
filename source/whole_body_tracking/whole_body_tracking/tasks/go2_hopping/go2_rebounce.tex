@@ -925,13 +925,21 @@ $W^{-}_{\mathrm{episode}}/\max(W^{\mathrm{abs}}_{\mathrm{episode}},\epsilon)$ \\
 \subsection{Step 5: Add Trampoline Parameter Randomization}
 
 After the policy can discover rebounding on the fixed trampoline, introduce
-trampoline randomization. In the present config the curriculum gate is
-disabled (\texttt{HOPPING\_INIT\_STEP}$=0$), so resets sample the full DR
-ranges from the start; restoring the gated curriculum is just a matter of
-raising \texttt{HOPPING\_INIT\_STEP} and widening
-\texttt{REBOUNCE\_HEIGHT\_RANGE}. The current Go2 rebounce trampoline setup
-uses multi-parameter randomization over stiffness, mass, friction, material
-damping, damping scale, and Poisson ratio. Young's modulus is sampled
+trampoline randomization. In the present config the curriculum gate is active
+(\texttt{HOPPING\_INIT\_STEP}$=1000\times24$), so early resets use fixed
+trampoline parameters before reset-time DR begins. The current Go2 rebounce
+trampoline setup uses cooked FEM geometry buckets with thickness
+$0.03/0.10$ m and simulation resolution $10/20$. During the fixed init phase,
+Young's modulus is still conditioned on the cooked resolution:
+\[
+    E =
+    \begin{cases}
+        8.0\times 10^4, & \text{sim resolution }10, \\
+        8.0\times 10^5, & \text{sim resolution }20.
+    \end{cases}
+\]
+After the init phase, reset randomization covers stiffness, mass, friction,
+material damping, damping scale, and Poisson ratio. Young's modulus is sampled
 log-uniformly with a range bucketed by the trampoline mesh sim resolution:
 \[
     \log E \sim

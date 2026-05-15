@@ -32,8 +32,9 @@ Current baseline:
 - temporary valid-apex bootstrap bonus is active before 1000 PPO iterations and
   then switched off by curriculum;
 - trampoline material/pinning DR is delayed until 1000 PPO iterations; early
-  resets use the fixed trampoline `(E=8e4, mass=10, mu=0.8, damping=0.02,
-  nu=0.35)`;
+  resets use fixed trampoline parameters with resolution-conditioned stiffness
+  `(E=8e4 for resolution 10, E=8e5 for resolution 20, mass=10, mu=0.8,
+  damping=0.02, nu=0.35)`;
 - trampoline geometry varies by spawn-time buckets
   `(thickness, simulation_hexahedral_resolution)`, currently the 2x2 set
   `(0.03/0.10, 10/20)`, with each env assigned one cooked FEM mesh for the

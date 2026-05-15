@@ -54,9 +54,12 @@ VELOCITY_RANGE = {
 }
 REBOUNCE_OBS_HISTORY_LENGTH = 10
 # Early phase: make hopping discovery easy before restoring the full command and trampoline DR ranges.
-HOPPING_INIT_STEP = 000 * 24
+HOPPING_INIT_STEP = 1000 * 24
 HOPPING_INIT_HEIGHT_RANGE = (0.5, 0.5)
-TRAMPOLINE_FIXED_YOUNGS_MODULUS_RANGE = (8.0e4, 8.0e4)
+TRAMPOLINE_FIXED_YOUNGS_MODULUS_RANGE_BY_SIM_RESOLUTION = {
+    "10": (8.0e4, 8.0e4),
+    "20": (8.0e5, 8.0e5),
+}
 TRAMPOLINE_FIXED_MASS_RANGE = (10.0, 10.0)
 TRAMPOLINE_FIXED_DYNAMIC_FRICTION_RANGE = (0.8, 0.8)
 TRAMPOLINE_FIXED_ELASTICITY_DAMPING_RANGE = (0.02, 0.02)
@@ -649,7 +652,7 @@ class TrampolineEventCfg(EventCfg):
             "poissons_ratio_range": TRAMPOLINE_DR_POISSONS_RATIO_RANGE,
             "pin_width_range": TRAMPOLINE_DR_PIN_WIDTH_RANGE,
             "randomization_start_step": HOPPING_INIT_STEP,
-            "fixed_youngs_modulus_range": TRAMPOLINE_FIXED_YOUNGS_MODULUS_RANGE,
+            "fixed_youngs_modulus_range_by_sim_resolution": TRAMPOLINE_FIXED_YOUNGS_MODULUS_RANGE_BY_SIM_RESOLUTION,
             "fixed_mass_range": TRAMPOLINE_FIXED_MASS_RANGE,
             "fixed_dynamic_friction_range": TRAMPOLINE_FIXED_DYNAMIC_FRICTION_RANGE,
             "fixed_elasticity_damping_range": TRAMPOLINE_FIXED_ELASTICITY_DAMPING_RANGE,

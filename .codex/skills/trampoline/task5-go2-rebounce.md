@@ -40,8 +40,9 @@ motor work.
 - `damping_scale`: uniform `(0.5, 1.0)`; PhysX requires this to stay in `[0, 1]`.
 - `poissons_ratio`: uniform `(0.25, 0.45)`.
 
-Training starts with fixed trampoline parameters
-`E=8.0e4`, `mass=10`, `dynamic_friction=0.8`,
+Training starts with fixed trampoline parameters: resolution 10 uses
+`E=8.0e4`, resolution 20 uses `E=8.0e5`, and all buckets use
+`mass=10`, `dynamic_friction=0.8`,
 `elasticity_damping=0.02`, `damping_scale=1.0`, and
 `poissons_ratio=0.35`; reset-time DR begins after 1000 PPO iterations.
 
