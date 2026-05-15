@@ -13,16 +13,14 @@
 \section{Current Task}
 
 The current task is hopping control for Go2. At reset, each
-environment samples a scalar target apex-height command. The full command
-range is
+environment samples a scalar target apex-height command. The eventual full
+command range is $h^{*}\sim\mathcal{U}(0.5,1.2)$ m, but the present training
+config keeps both the target apex height and the initial drop height fixed at
+$0.5$ m:
 \begin{equation}
-    h^{*} \sim \mathcal{U}(0.5, 1.2)\ \mathrm{m},
-\end{equation}
-but during the initial hopping-discovery curriculum it is fixed to
-$h^*=0.5$ m. The initial drop height is sampled independently throughout
-training:
-\begin{equation}
-    h_{\mathrm{drop}} \sim \mathcal{U}(0.5, 1.2)\ \mathrm{m}.
+    h^{*} = 0.5\ \mathrm{m},
+    \qquad
+    h_{\mathrm{drop}} = 0.5\ \mathrm{m}.
 \end{equation}
 The robot base is placed at $h_{\mathrm{drop}}$ with zero root velocity and the
 default joint state. The policy must keep hopping for the full episode. The
@@ -81,10 +79,16 @@ The rebounce command is
 \begin{equation}
     \bm{c} = [h^{*}].
 \end{equation}
-In the current setup, the target rebound-apex height and the initial drop height
-are independent. During the first $1000$ PPO iterations the target is fixed to
-$0.5$ m; after that it uses the full range:
-\begin{equation}
+In the current setup the target rebound-apex height and the initial drop height
+share the same range
+\[
+    \texttt{REBOUNCE\_HEIGHT\_RANGE} = (0.5,\,0.5),
+\]
+so both are fixed at $0.5$ m during training and evaluation. The hopping-init
+curriculum term is wired up but currently inactive because
+$\texttt{HOPPING\_INIT\_STEP}=0\times24=0$; reactivating it (and widening
+\texttt{REBOUNCE\_HEIGHT\_RANGE}) is the intended path back to the full range
+\[
     h^{*} =
     \begin{cases}
         0.5, & N \le 1000\times24, \\
@@ -92,7 +96,7 @@ $0.5$ m; after that it uses the full range:
     \end{cases}
     \qquad
     h_{\mathrm{drop}} \sim \mathcal{U}(0.5,1.2).
-\end{equation}
+\]
 The reset event writes $h^{*}$ into the command buffer and sets the root state
 to
 \begin{equation}
@@ -571,8 +575,9 @@ The weighted reward is
 \begin{aligned}
     R_t = \Delta t \Big(
         &-250\,r^{\mathrm{fail}}_t
-        +50\,r^{\mathrm{apex}}_t \\
-        &-1.5\times10^{-2}\,r^{\mathrm{energy}}_t \\
+        +1.0\,r^{\mathrm{apex,cyc}}_t \\
+        &-2\,r^{\mathrm{flight}}_t
+        -0.05\,r^{\mathrm{sym}}_t \\
         &-2\,r^{\mathrm{orient}}_t
         -0.5\,r^{\mathrm{inplace}}_t
         -10^{-2}\,r^{\mathrm{action}}_t
@@ -581,6 +586,10 @@ The weighted reward is
     \Big).
 \end{aligned}
 \end{equation}
+The non-cycle-normalized apex pulse (\texttt{rebounce\_height}) and the
+mechanical-work-per-height term (\texttt{energy\_penalty}) remain defined in
+the config but currently carry weight $0$. The energy-penalty curriculum hook
+is left commented out and is intended to be re-enabled after Step~4.
 
 The failure pulse is
 \begin{equation}
@@ -608,13 +617,43 @@ The flat-body gate is
 \end{equation}
 The height reward does not include an additional soft foot-clearance gate;
 foot clearance is enforced only by the valid-apex event detector.
-The apex pulse reward is
+The active apex pulse reward is the cycle-normalized variant
+\begin{equation}
+    r^{\mathrm{apex,cyc}}_t =
+    \mathbb{I}[b^{\mathrm{valid}}_{t-1}]
+    \exp\left(-\left(\frac{e^{h,\mathrm{apex}}_t}{0.10}\right)^2\right)
+    g^{\mathrm{flat}}_t
+    \,\frac{\mathrm{clip}(\Delta t^{\mathrm{cyc}}_t,\,\Delta t,\,T^{\mathrm{cyc}}_{\max})}{\Delta t},
+\end{equation}
+where $\Delta t^{\mathrm{cyc}}_t$ is the wall-clock interval since the previous
+valid apex, $\Delta t = 0.02$ s, and $T^{\mathrm{cyc}}_{\max}=2.0$ s. Scaling
+each apex pulse by the elapsed bounce period prevents the policy from
+boosting episode reward by simply increasing the number of valid apexes per
+second. The non-normalized variant
 \begin{equation}
     r^{\mathrm{apex}}_t =
     \mathbb{I}[b^{\mathrm{valid}}_{t-1}]
     \exp\left(-\left(\frac{e^{h,\mathrm{apex}}_t}{0.10}\right)^2\right)
-    g^{\mathrm{flat}}_t.
+    g^{\mathrm{flat}}_t
 \end{equation}
+is still defined but currently disabled (weight $0$).
+
+Two new dense terms back up the sparse apex pulse. The flight-velocity
+penalty consumes the command-owned per-step mean excess joint velocity above
+the configured deadbands during the DOB-detected flight phase:
+\begin{equation}
+    r^{\mathrm{flight}}_t = \texttt{flight\_excess\_joint\_vel\_step}_t.
+\end{equation}
+The Go2 left/right symmetry penalty is an L2 deviation between paired
+left/right joints relative to the default joint pose, with hips mirrored and
+thighs/calves co-directed:
+\begin{equation}
+    r^{\mathrm{sym}}_t =
+    \sum_{\mathrm{pair}\in\{\mathrm{F},\mathrm{R}\}}
+    \sum_{j\in\{\mathrm{hip},\mathrm{thigh},\mathrm{calf}\}}
+    \left(\frac{\Delta q_{j,\mathrm{pair},t}}{\sigma_j}\right)^2,
+\end{equation}
+with $\sigma_{\mathrm{hip}}=0.25$ and $\sigma_{\mathrm{thigh}}=\sigma_{\mathrm{calf}}=0.35$.
 
 The remaining penalties are standard orientation, action-rate, joint-deviation,
 and joint-position-limit regularizers. The in-place term penalizes drift from
@@ -631,22 +670,25 @@ the reset xy position and reset yaw:
 \end{equation}
 
 \paragraph{Reward scale.}
-In the current $20$ s setup, a single perfect apex pulse contributes
+In the current $20$ s setup, a single perfect cycle-normalized apex pulse
+with bounce period $\Delta t^{\mathrm{cyc}}$ contributes
 \[
-    50 \cdot 0.02 / 20 = 0.05
+    1.0 \cdot (\Delta t^{\mathrm{cyc}}/\Delta t) \cdot \Delta t / 20
+    = \Delta t^{\mathrm{cyc}}/20
 \]
-to the logged \texttt{Episode\_Reward/rebounce\_height}. A single failure
-termination contributes approximately
+to the logged \texttt{Episode\_Reward/rebounce\_height\_cycle\_normalized};
+a typical $\Delta t^{\mathrm{cyc}}\approx 0.5$ s gives $\approx 0.025$ per apex,
+and clipping at $T^{\mathrm{cyc}}_{\max}=2.0$ s caps a single apex at $0.1$.
+A single failure termination contributes approximately
 \[
     -250 \cdot 0.02 / 20 = -0.25
 \]
 for the environments where that failure happened, before averaging over all
-reset environments. With the current absolute-work weight, a typical sparse
-energy pulse of $W^{\mathrm{abs}}/h^{*}\approx 250$ contributes
-\[
-    -1.5\times10^{-2}\cdot250\cdot0.02/20 \approx -0.00375
-\]
-to the logged \texttt{Episode\_Reward/energy\_penalty} for one valid apex.
+reset environments. The \texttt{energy\_penalty} term currently has weight
+$0$, so it does not contribute to the logged reward; the historical sparse
+pulse $-1.5\times10^{-2}\cdot 250\cdot 0.02/20\approx -0.00375$ from an
+absolute-work weight of $-1.5\times10^{-2}$ is recorded here for when the
+term is re-enabled in Step~4.
 
 \section{Implementation Files}
 
@@ -684,23 +726,27 @@ state, run ID, checkpoint, and videos. The expected healthy indicators are:
 
 \subsection{Step 1: Decouple Initial Drop Height from Target Apex Height}
 
-This has been implemented in the current setup. The target apex height and
-the initial drop height are sampled independently. The target uses a short
-hopping-init curriculum; the drop height always uses the full range:
+The mechanism for decoupling the target apex height from the initial drop
+height is implemented (separate command-side range and reset-event range),
+but the present config keeps both ranges identical and fixed:
 \[
-    h^{*}=0.5\ \text{before }1000\times24\text{ steps, then }
-    h^{*}\sim \mathcal{U}(0.5,1.2), \qquad
-    h_{\mathrm{drop}} \sim \mathcal{U}(0.5, 1.2).
+    h^{*}=0.5,\qquad h_{\mathrm{drop}}=0.5.
 \]
-The height rewards and metrics now compare apex height against $h^{*}$ rather
-than against $h_{\mathrm{drop}}$. This tests whether the policy controls
-rebound height, rather than only recovering to the height from which it was
-dropped.
+Reactivating the intended decoupled curriculum amounts to widening
+\texttt{REBOUNCE\_HEIGHT\_RANGE} to $(0.5,1.2)$, setting
+\texttt{HOPPING\_INIT\_STEP} back to $1000\times24$, and overriding the
+\texttt{drop\_height\_range} parameter on \texttt{reset\_drop} to
+$\mathcal{U}(0.5,1.2)$ independently of the command range. The height
+rewards and metrics compare apex height against $h^{*}$ rather than against
+$h_{\mathrm{drop}}$, so once the ranges are decoupled this tests whether the
+policy controls rebound height rather than only recovering to the height from
+which it was dropped.
 
-For fixed-condition evaluation, the eval script sets
-$h_{\mathrm{drop}}=h^{*}$ by default unless \texttt{drop\_height} is explicitly
-swept. This removes one nuisance variable when comparing policies across
-trampoline parameters.
+For fixed-condition evaluation, \texttt{apply\_play\_overrides} sets both the
+command range and the drop-height range to \texttt{REBOUNCE\_HEIGHT\_RANGE},
+i.e.\ $h_{\mathrm{drop}}=h^{*}=0.5$ in the present configuration. This
+removes one nuisance variable when comparing policies across trampoline
+parameters.
 
 \subsection{Step 2: Add In-Place Hopping}
 
@@ -780,40 +826,41 @@ The implementation exposes this through the \texttt{mode} parameter of
 \texttt{mode=absolute} for $W^{\mathrm{abs}}_k/h^{*}_k$. The raw reward follows
 the same convention as the apex-height pulse: Isaac Lab applies the global
 $\Delta t$ scaling, and the event scale is handled in the configured weight.
-With the current $\Delta t=0.02$ s, the current absolute-work trial weight is
+In the current config the term is wired to \texttt{mode=absolute} but with
+weight $0$; the intended absolute-work trial weight, to be restored after
+hopping is stable, is
 \[
     w_{\mathrm{energy}} = -1.5\times10^{-2}.
 \]
 
-The current training curriculum has two switches. First, the hopping-init phase
-keeps the commanded target at $h^*=0.5$ m and keeps the trampoline fixed:
+The training curriculum has two switches that are both currently inactive.
+The hopping-init switch is intended to keep the commanded target at
+$h^*=0.5$ m and the trampoline fixed for
 \[
     N_{\mathrm{init}} = 1000 \times 24 = 24000
 \]
-manager steps. Before this threshold, resets use
-\[
-    h^*=0.5
-\]
-and the fixed trampoline
+manager steps, but the present config sets
+$\texttt{HOPPING\_INIT\_STEP}=0$ so neither the target-height nor the
+trampoline-DR randomization curriculum activates: the target stays at $0.5$ m
+for the whole run (\texttt{REBOUNCE\_HEIGHT\_RANGE}$=(0.5,0.5)$) and the
+trampoline is randomized from step $0$ over the full DR ranges. The fixed
+trampoline values referenced by the (currently unused) curriculum branch are
 \[
     E=8.0\times10^4,\quad
     m=10,\quad
     \mu_d=0.8,\quad
     d_e=0.02,\quad
+    \mathrm{damping\_scale}=1.0,\quad
     \nu=0.35.
 \]
-After this threshold, the target range returns to
-$h^*\sim\mathcal{U}(0.5,1.2)$ and reset-time trampoline randomization switches
-to the configured DR ranges. The drop-height range is unchanged by this
-curriculum.
 
-Second, the energy reward term starts with zero weight and is enabled later:
+The energy-penalty curriculum is also disabled. The intended schedule
 \[
-    N_{\mathrm{energy}} = 5000 \times 24 = 120000.
+    N_{\mathrm{energy}} = 5000 \times 24 = 120000
 \]
-This lets the policy first discover sustained rebounding and then adapt to
-trampoline variation before the sparse work-per-height penalty can make passive
-non-jumping attractive.
+remains documented because the energy term is meant to be enabled after the
+policy discovers sustained rebounding and adapts to trampoline variation;
+turning it on early can make passive non-jumping attractive.
 The positive-work term penalizes active mechanical energy injected by the
 motors:
 \[
@@ -878,36 +925,48 @@ $W^{-}_{\mathrm{episode}}/\max(W^{\mathrm{abs}}_{\mathrm{episode}},\epsilon)$ \\
 \subsection{Step 5: Add Trampoline Parameter Randomization}
 
 After the policy can discover rebounding on the fixed trampoline, introduce
-trampoline randomization. In the current training config, this is done as a
-curriculum: the first $1000$ PPO iterations use the fixed trampoline listed
-above while the target height is fixed at $0.5$ m. Later resets sample the
-random ranges and restore the full target range. The current Go2 rebounce
-trampoline setup uses multi-parameter randomization over stiffness, mass,
-friction, material damping, and Poisson ratio:
+trampoline randomization. In the present config the curriculum gate is
+disabled (\texttt{HOPPING\_INIT\_STEP}$=0$), so resets sample the full DR
+ranges from the start; restoring the gated curriculum is just a matter of
+raising \texttt{HOPPING\_INIT\_STEP} and widening
+\texttt{REBOUNCE\_HEIGHT\_RANGE}. The current Go2 rebounce trampoline setup
+uses multi-parameter randomization over stiffness, mass, friction, material
+damping, damping scale, and Poisson ratio. Young's modulus is sampled
+log-uniformly with a range bucketed by the trampoline mesh sim resolution:
 \[
     \log E \sim
-    \mathcal{U}\left(\log(2.0\times 10^4),\log(8.0\times 10^4)\right),
-    \qquad
-    m \sim \mathcal{U}(5,15),
+    \begin{cases}
+        \mathcal{U}\!\left(\log(8.0\times 10^3),\log(8.0\times 10^4)\right), &
+        \text{sim resolution }10, \\
+        \mathcal{U}\!\left(\log(8.0\times 10^4),\log(8.0\times 10^5)\right), &
+        \text{sim resolution }20,
+    \end{cases}
 \]
 \[
-    \mu_d \sim \mathcal{U}(0.4,1.2),
+    m \sim \mathcal{U}(10,20),
     \qquad
+    \mu_d \sim \mathcal{U}(0.4,1.2),
+\]
+\[
     d_e \sim \mathcal{U}(0.01,0.1),
     \qquad
-    \nu \sim \mathcal{U}(0.25,0.45),
+    \mathrm{damping\_scale} \sim \mathcal{U}(0.5,1.0),
+    \qquad
+    \nu \sim \mathcal{U}(0.25,0.45).
 \]
-with \texttt{damping\_scale}=1.0 fixed. Young's modulus is sampled
-log-uniformly because stiffness changes multiplicatively; the other parameters
-are sampled uniformly in their current engineering ranges. The earlier
-first-stage setup used
+The trampoline pin width is also randomized as
+$w_{\mathrm{pin}}\sim\mathcal{U}(0.3,0.5)$ m, with a fixed-mode value of
+$0.4$ m. Young's modulus is sampled log-uniformly because stiffness changes
+multiplicatively; the other parameters are sampled uniformly in their current
+engineering ranges. The earlier first-stage setup used
 \[
     E\sim \mathrm{LogUniform}(4.0\times10^4,1.6\times10^5),
     \qquad m=10,
 \]
-and remains a useful historical baseline. The current range intentionally
-shifts toward softer trampolines because the old $8.0\times10^4$ and
-$1.6\times10^5$ settings were too similar in height tracking.
+and remains a useful historical baseline. The current per-resolution ranges
+intentionally extend toward softer trampolines because the old
+$8.0\times10^4$ and $1.6\times10^5$ settings were too similar in height
+tracking.
 
 The randomizable trampoline parameters should be introduced in stages:
 \begin{center}
@@ -1013,11 +1072,14 @@ The actor is intentionally partially observable: it must handle changes in
 trampoline stiffness, mass, damping, friction, and Poisson ratio without being
 told their values.
 
-Training uses the same hopping-init curriculum as the environment: before
-$1000\times24$ manager steps, the target height is fixed at $0.5$ m and the
-trampoline is fixed. After that, the target range returns to $[0.5,1.2]$ m and
-the trampoline parameters are randomized on reset. The energy penalty remains
-disabled until $5000\times24$ manager steps.
+In the present config the curriculum hooks are disabled
+(\texttt{HOPPING\_INIT\_STEP}$=0$ and the energy-penalty curriculum term is
+commented out), so training uses the fixed target $h^{*}=0.5$ m with full
+trampoline-DR on resets from step $0$, and the energy reward weight stays at
+$0$. The intended curriculum (hopping-init for $1000\times24$ manager steps,
+then full target range; energy term enabled after $5000\times24$ steps) is
+documented above and is the path back to the full task once stable hopping
+returns.
 
 \subsection{MLP + History}
 
@@ -1049,8 +1111,9 @@ temporal inference rather than extra privileged information.
 The privileged teacher is a PPO policy trained with an augmented actor
 observation. In addition to the deployable terms, the teacher receives root
 state and normalized true trampoline parameters. The trampoline parameter vector
-contains stiffness, mass, friction, damping, damping scale, and Poisson ratio in
-the normalized form defined by the observation term.
+contains stiffness, mass, Poisson ratio, dynamic friction, and elasticity
+damping in the normalized form defined by the observation term (the
+\texttt{damping\_scale} multiplier is not included).
 
 This teacher is not deployable. Its purpose is to measure an upper bound for
 what a policy could do if it knew the hidden trampoline dynamics and full root

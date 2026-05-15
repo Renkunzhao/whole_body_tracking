@@ -114,13 +114,13 @@
       "id": "trampoline_youngs_modulus",
       "type": "promptString",
       "description": "Type trampoline Young's modulus",
-      "default": "8.0e3"
+      "default": "8.0e4"
     },
     {
       "id": "trampoline_mass",
       "type": "promptString",
       "description": "Type trampoline mass",
-      "default": "5.0"
+      "default": "10.0"
     },
     {
       "id": "trampoline_dynamic_friction",
@@ -162,7 +162,7 @@
       "id": "trampoline_sim_resolution",
       "type": "promptString",
       "description": "Type trampoline FEM hex resolution. Default 10.",
-      "default": "10"
+      "default": "20"
     },
     {
       "id": "video_length",
