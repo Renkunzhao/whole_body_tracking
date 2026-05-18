@@ -233,7 +233,7 @@
         // "--video",
         // "--video_interval", "${input:video_interval}",
         // "--registry_name", "${input:motion}",
-        "--wandb_path", "${input:wandb_path}",
+        // "--wandb_path", "${input:wandb_path}",
         "--logger", "wandb", 
         "--log_project_name", "WBT", 
         "--run_name", "wbt-${input:output_name}"
@@ -257,7 +257,6 @@
         // "--video_interval", "${input:video_interval}",
         // "--registry_name", "${input:motion}",
         // "--wandb_path", "${input:wandb_path}",
-        // "--device", "cuda:1",
         "--logger", "wandb",
         "--log_project_name", "WBT",
         "--run_name", "wbt-${input:output_name}"
