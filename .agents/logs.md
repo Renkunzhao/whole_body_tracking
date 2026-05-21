@@ -190,4 +190,6 @@ IsaacLab/PhysX 中的 `contact_offset` 相当于在可视/物理 mesh 外包裹�
 - `2026-05-19`：拆分原 `.agents/trampoline_isaaclab_mujoco_comparison.md` 为 `.agents/instruction.md` 和 `.agents/logs.md`，分别保存长期计划与实验日志。
 - `2026-05-20`：根据实物有效半径固定为 `1.5 m` 的原则，移除 `pin_width` sweep，把 IsaacLab pinning 改为根据网格边缘半径自动固定 `radial_distance >= min(usable_radius, edge_radius)` 的节点；Phase 1 后续只记录 `pinned_node_count`。
 - `2026-05-20`：确认 IsaacLab `DeformableBodyPropertiesCfg.contact_offset` 默认值为 `None`；移除 trampoline 侧显式 `contact_offset` 配置、Phase 1 CLI 参数和相关 sweep 条件，后续使用 IsaacLab/PhysX 默认接触包络。
+- `2026-05-20`：新增 `scripts/isaaclab_trampoline_resolution_saturation.py`，用于在 rebounce DR 边界参数组下逐步增加 `simulation_hexahedral_resolution`，用 ball-drop 动态指标判断分辨率响应是否达到上限；同时扩展 Phase 1 单条件脚本支持 `--ball_mass`、`--trampoline_mass` 和 `--no-video`。
+- `2026-05-20`：修正 trampoline center node 选择逻辑：从只按 xy 最近改为中心 xy 候选中的最高 z 节点，避免厚 mesh 在不同 resolution 下选到 top/bottom 不同层导致 `max_compression_m` 跨分辨率不可比；同时将 rebounce/resolution saturation 的 Young's modulus sweep 范围从 `8e4-8e5` 提高到 `8e5-8e6`。
 - 后续每次实验补充：实验次数、仿真器、输出路径、指标结果、失败模式、参数调整、结论。

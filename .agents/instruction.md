@@ -30,7 +30,7 @@
 ## 阶段性结论
 
 1. **两种模型不是同一类参数化。**
-   - IsaacLab 是体积 FEM / deformable object，参数是 Young's modulus、damping、resolution、边缘 pinning 规则等。
+   - IsaacLab 是体积 FEM / deformable object，参数是 `resolution`, `thickness`, `Young's modulus & mass`, `damping`, `possion` 等。
    - MuJoCo 这里是 `flexcomp`，更像“离散柔性网格 + 约束/接触求解”的模型，关键参数是 `count / spacing / radius / mass / pin ids / edge solref / edge solimp`。
 2. **不能只按外观一一对应。**
    - 相同外观不代表相同接触时序、能量返还、压缩量、回弹相位。
@@ -47,6 +47,11 @@
    - `simulation_hexahedral_resolution`、`thickness` 等需要首先固定下来。
    - IsaacLab `DeformableBodyPropertiesCfg.contact_offset` 默认是 `None`，表示不显式修改 PhysX 默认值；trampoline 不再手动指定或 sweep 这个参数。
    - `simulation_hexahedral_resolution` 分辨率应该同时考虑保真度和速度，暂时选为15，如果后面training太慢，保真太低或无法对齐再修改
+      - 可以进行一个测试即在固定当前其他参数的情况下，分辨率增加带来的仿真效果变化（主要是trampoline变软）是否有上限，如果有，那么选择仿真效果基本达到上限时的最小分辨率即可
+      - 测试结果
+         - 固定较低 `Young's modulus=8e4` 时，分辨率升高会明显增加有效柔度；高分辨率下会出现穿膜/掉穿，已知 `resolution=24` 稳定穿膜，`resolution=20` 在 `thickness=0.03` 时穿膜、`thickness=0.1` 时暂未穿膜。
+         - 提高 resolution 不必然导致穿膜；是否失效取决于 `Young's modulus`、厚度、冲击强度和阻尼。后续 saturation 测试把 Young's modulus 边界提高到 `8e5 - 8e6`。
+         - 旧 `max_compression_m` 指标曾用只按 xy 选出的 center node；厚 mesh 不同 resolution 可能选到 top/bottom 不同 z 层，因此已改为 top-center node 以保证跨分辨率可比。
    - `thickness` 厚度应该优先测试
       - 之前发现在使用dob判断contact的版本，thickness=0.03可能导致train不出来，所以不要低于0.03
       - 在较大范围 0.03 - 0.3 测试厚度对ball drop指标的影响
@@ -233,17 +238,18 @@
 | 参数 | 生命周期 | 为什么先测 | 建议第一轮取值 |
 |---|---|---|---|
 | contact offset | IsaacLab/PhysX default | 不手动指定，避免把引擎接触包络作为可调参数 | fixed default (`None`) |
-| `simulation_hexahedral_resolution` | spawn/cook-time | 改变 FEM 离散化和局部变形模式 | `8 / 10 / 15 / 20` |
-| `thickness` | spawn-time geometry | 改变几何厚度、顶面/中心位置和整体柔度 | `0.03 / 0.06 / 0.10` |
+| `simulation_hexahedral_resolution` | spawn/cook-time | 改变 FEM 离散化和局部变形模式；用 resolution saturation 测试选择接近动态指标上限的最小分辨率 | `8 / 10 / 12 / 15 / 18 / 20 / 24` |
+| `thickness` | spawn-time geometry | 改变几何厚度、顶面/中心位置和整体柔度 | `0.03 / 0.10` |
 | edge pinning rule | kinematic target / boundary condition | 由网格边缘半径和 `usable_radius=1.5` 自动决定固定节点 | 不 sweep `pin_width` |
 
 ### 执行顺序
 
 1. 先跑 nominal，确认当前结构基线：`thickness=0.1`、`simulation_hexahedral_resolution=15`、`usable_radius=1.5`，并使用 IsaacLab 默认 contact offset。
-2. 单因素扫 `simulation_hexahedral_resolution`，筛掉过粗或过慢的离散化设置，并记录自动计算得到的 pinned node 数量。
-3. 单因素扫 `thickness`，确认几何厚度是否主导压缩量和回弹高度。
-4. 不再扫 `pin_width`；边界固定由网格边缘半径和实物有效半径自动决定。
-5. 不再扫 `contact_offset`；它保持 IsaacLab/PhysX 默认值。
+2. 跑独立的 resolution saturation 测试：在多组 rebounce DR 边界参数下固定其他参数，逐步增加 `simulation_hexahedral_resolution`，用 ball-drop 动态指标判断“分辨率增加带来的变软/响应变化是否达到上限”。
+3. saturation 测试第一轮固定高冲击条件：小球质量为 G1 URDF 总质量的一半（当前约 `16.67 kg`），小球高度 `1.0 m`；只组合 `thickness=0.03/0.10`、`mass+youngs_modulus` 的 DR 上下限、`elasticity_damping+damping_scale` 的 DR 上下限；当前 Young's modulus sweep 边界为 `8e5 / 8e6`。
+4. 如果各参数组在某个 resolution 后 top-center `max_compression_m`、`contact_duration_s`、`release_vz_mps`、`rebound_height_m` 连续两档相对变化都小于阈值（默认 `5%`），则认为该组基本达到上限；只有所有组都有推荐值时才输出全局候选分辨率，并取各组推荐值的最大值。
+5. 不再扫 `pin_width`；边界固定由网格边缘半径和实物有效半径自动决定。
+6. 不再扫 `contact_offset`；它保持 IsaacLab/PhysX 默认值。
 
 ### Phase 1 判据
 
@@ -258,8 +264,10 @@
 
 - 单条件脚本：`scripts/isaaclab_trampoline_phase1_condition.py`
 - Phase 1 driver：`scripts/isaaclab_trampoline_phase1_sweep.py`
+- Resolution saturation driver：`scripts/isaaclab_trampoline_resolution_saturation.py`
 - 单次运行 artifact 根目录：`logs/isaaclab_trampoline_phase1_runs/`
-- 每次单条件运行会按时间和参数创建独立文件夹，目录名包含 `label / sim_time / sim_dt / ball_height / sim_resolution / thickness / youngs_modulus / elasticity_damping / damping_scale`。
+- Resolution saturation artifact 根目录：`logs/isaaclab_trampoline_resolution_saturation_runs/`
+- 每次单条件运行会按时间和参数创建独立文件夹，目录名包含 `label / sim_time / sim_dt / ball_height / ball_mass / sim_resolution / thickness / trampoline_mass / youngs_modulus / elasticity_damping / damping_scale`。
 - 单次运行文件夹内包含：
   - `phase1_summary.csv`：单次 summary 指标。
   - `phase1_trajectory.csv`：逐步记录小球位置/速度、trampoline 中心点位置/速度、compression、contact/release 标志。
@@ -267,21 +275,22 @@
   - `phase1_compression.png`：trampoline 中心压缩量图。
   - `phase1_video.mp4`：视频。
 - CSV 路径由运行目录自动生成，不通过 `--output` 手动指定。
+- Resolution saturation 汇总输出：`resolution_saturation_runs.csv` 和 `resolution_saturation_group_summary.csv`。
 
 示例命令：
 
 ```bash
 python scripts/isaaclab_trampoline_phase1_condition.py --headless --label nominal
 python scripts/isaaclab_trampoline_phase1_sweep.py --headless
+python scripts/isaaclab_trampoline_resolution_saturation.py --headless --no-video
 ```
 
 ## 当前下一步
 
 1. 先在 IsaacLab 中找能 release 的结构基线，不要直接进入大规模 policy 训练。
-2. 小规模 sweep 优先覆盖：
-   - `thickness`: `0.03 / 0.06 / 0.1`
-   - `simulation_hexahedral_resolution`: 先固定 `15`，必要时比较 `20`
-3. 如果结构参数仍然 no-release，再进入材料参数：
+2. 优先运行 resolution saturation 测试，确认训练用 `simulation_hexahedral_resolution` 是否已经接近动态响应上限。
+3. saturation 第一轮覆盖 `thickness=0.03/0.10`、rebounce DR 中 `mass+youngs_modulus` 上下限、`elasticity_damping+damping_scale` 上下限；小球质量固定为 G1 总重一半，高度固定为 `1.0 m`。
+4. 如果结构参数仍然 no-release，再进入材料参数：
    - `elasticity_damping=0.005`
    - `damping_scale=0.2`
-4. 找到 IsaacLab 可 release 组合后，再对齐 MuJoCo nominal 的 contact timing、compression、release velocity、rebound height。
+5. 找到 IsaacLab 可 release 组合后，再对齐 MuJoCo nominal 的 contact timing、compression、release velocity、rebound height。

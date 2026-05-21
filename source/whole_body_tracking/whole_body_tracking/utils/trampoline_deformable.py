@@ -81,7 +81,12 @@ def build_trampoline_kinematic_targets(
     edge_radius = radial_distance.max(dim=1, keepdim=True).values
     pin_threshold = torch.minimum(torch.clamp(pin_radius_column, min=0.0), edge_radius)
     pinned_mask = radial_distance >= pin_threshold
-    center_node_ids = radial_distance.argmin(dim=1)
+    # Pick the highest-z node among those at the minimum xy radial distance so the
+    # selection stays on the top face for thick meshes and is comparable across resolutions.
+    min_radial_distance = radial_distance.amin(dim=1, keepdim=True)
+    center_candidates = radial_distance <= min_radial_distance + 1.0e-6
+    center_candidate_z = torch.where(center_candidates, nodal_pos[..., 2], torch.full_like(nodal_pos[..., 2], -torch.inf))
+    center_node_ids = center_candidate_z.argmax(dim=1)
 
     targets[..., 3] = torch.where(
         pinned_mask,

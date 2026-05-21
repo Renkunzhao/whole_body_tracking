@@ -114,7 +114,7 @@
       "id": "trampoline_youngs_modulus",
       "type": "promptString",
       "description": "Type trampoline Young's modulus",
-      "default": "2.0e4"
+      "default": "8.0e4"
     },
     {
       "id": "trampoline_mass",

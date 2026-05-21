@@ -21,6 +21,7 @@ DEFAULT_SIM_TIME = 4.0
 CONTACT_START_BOTTOM_Z = 0.015
 CONTACT_END_BOTTOM_Z = 0.035
 DEFAULT_THICKNESS = 0.1
+DEFAULT_TRAMPOLINE_MASS = 10.0
 DEFAULT_SIM_RESOLUTION = 15
 DEFAULT_YOUNGS = 8.0e4
 DEFAULT_ELASTICITY_DAMPING = 0.02
@@ -40,12 +41,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--sim_time", type=float, default=DEFAULT_SIM_TIME, help="Simulation duration in seconds.")
     parser.add_argument("--sim_dt", type=float, default=DEFAULT_SIM_DT, help="Simulation timestep in seconds.")
     parser.add_argument("--ball_height", type=float, default=DEFAULT_BALL_HEIGHT, help="Initial ball center height.")
+    parser.add_argument("--ball_mass", type=float, default=BALL_MASS, help="Ball mass in kilograms.")
     parser.add_argument("--thickness", type=float, default=DEFAULT_THICKNESS, help="Trampoline thickness in meters.")
+    parser.add_argument("--trampoline_mass", type=float, default=DEFAULT_TRAMPOLINE_MASS, help="Trampoline mass in kilograms.")
     parser.add_argument("--sim_resolution", type=int, default=DEFAULT_SIM_RESOLUTION, help="Hexahedral resolution used at spawn time.")
     parser.add_argument("--youngs_modulus", type=float, default=DEFAULT_YOUNGS, help="Young's modulus used for the trampoline material.")
     parser.add_argument("--elasticity_damping", type=float, default=DEFAULT_ELASTICITY_DAMPING, help="Elasticity damping used for the trampoline material.")
     parser.add_argument("--damping_scale", type=float, default=DEFAULT_DAMPING_SCALE, help="Damping scale used for the trampoline material.")
-    parser.add_argument("--video", action="store_true", default=True, help="Record an MP4 for this run.")
+    parser.add_argument("--video", action=argparse.BooleanOptionalAction, default=True, help="Record an MP4 for this run.")
     parser.add_argument("--video_width", type=int, default=DEFAULT_VIDEO_WIDTH, help="Video width in pixels.")
     parser.add_argument("--video_height", type=int, default=DEFAULT_VIDEO_HEIGHT, help="Video height in pixels.")
     parser.add_argument("--video_fps", type=int, default=DEFAULT_VIDEO_FPS, help="Video frame rate.")
@@ -70,7 +73,6 @@ from isaaclab.sensors.camera import Camera, CameraCfg  # noqa: E402
 from isaaclab.utils import configclass  # noqa: E402
 
 from whole_body_tracking.utils.trampoline_deformable import (  # noqa: E402
-    TRAMPOLINE_MASS,
     build_trampoline_kinematic_targets,
     make_trampoline_cfg,
     set_trampoline_damping_scales,
@@ -123,8 +125,10 @@ def build_run_dir(args: argparse.Namespace) -> Path:
         f"t{format_float_label(args.sim_time)}",
         f"dt{format_float_label(args.sim_dt)}",
         f"h{format_float_label(args.ball_height)}",
+        f"bm{format_float_label(args.ball_mass)}",
         f"sr{args.sim_resolution}",
         f"th{format_float_label(args.thickness)}",
+        f"tm{format_float_label(args.trampoline_mass)}",
         f"E{format_float_label(args.youngs_modulus)}",
         f"ed{format_float_label(args.elasticity_damping)}",
         f"ds{format_float_label(args.damping_scale)}",
@@ -132,7 +136,7 @@ def build_run_dir(args: argparse.Namespace) -> Path:
     return args.artifact_root.expanduser().resolve() / "__".join(parts)
 
 
-def make_ball_cfg(prim_path: str, ball_height: float) -> RigidObjectCfg:
+def make_ball_cfg(prim_path: str, ball_height: float, ball_mass: float) -> RigidObjectCfg:
     return RigidObjectCfg(
         prim_path=prim_path,
         spawn=sim_utils.SphereCfg(
@@ -142,7 +146,7 @@ def make_ball_cfg(prim_path: str, ball_height: float) -> RigidObjectCfg:
                 solver_velocity_iteration_count=2,
                 max_depenetration_velocity=10.0,
             ),
-            mass_props=sim_utils.MassPropertiesCfg(mass=BALL_MASS),
+            mass_props=sim_utils.MassPropertiesCfg(mass=ball_mass),
             collision_props=sim_utils.CollisionPropertiesCfg(contact_offset=0.01, rest_offset=0.0),
             physics_material=sim_utils.RigidBodyMaterialCfg(static_friction=0.7, dynamic_friction=0.6, restitution=0.0),
             visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.95, 0.35, 0.15), metallic=0.2),
@@ -153,11 +157,11 @@ def make_ball_cfg(prim_path: str, ball_height: float) -> RigidObjectCfg:
 
 @configclass
 class Phase1SceneCfg(InteractiveSceneCfg):
-    ball: RigidObjectCfg = make_ball_cfg("{ENV_REGEX_NS}/Ball", args_cli.ball_height)
+    ball: RigidObjectCfg = make_ball_cfg("{ENV_REGEX_NS}/Ball", args_cli.ball_height, args_cli.ball_mass)
     trampoline = make_trampoline_cfg(
         "{ENV_REGEX_NS}/Trampoline",
         thickness=args_cli.thickness,
-        mass=TRAMPOLINE_MASS,
+        mass=args_cli.trampoline_mass,
         youngs_modulus=args_cli.youngs_modulus,
         sim_resolution=args_cli.sim_resolution,
     )
@@ -424,7 +428,10 @@ def main() -> None:
         row = {
             "label": args_cli.label,
             "run_dir": str(run_dir),
+            "ball_mass": args_cli.ball_mass,
+            "ball_height": args_cli.ball_height,
             "thickness": args_cli.thickness,
+            "trampoline_mass": args_cli.trampoline_mass,
             "sim_resolution": args_cli.sim_resolution,
             "pinned_node_count": int(pinned_mask[0].sum().item()),
             "youngs_modulus": args_cli.youngs_modulus,
