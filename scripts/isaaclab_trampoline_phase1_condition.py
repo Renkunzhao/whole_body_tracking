@@ -17,9 +17,13 @@ BALL_RADIUS = 0.022
 BALL_MASS = 4.02
 DEFAULT_BALL_HEIGHT = 1.0
 DEFAULT_SIM_DT = 0.002
-DEFAULT_SIM_TIME = 4.0
+DEFAULT_SIM_TIME = 10.0
 CONTACT_START_BOTTOM_Z = 0.015
 CONTACT_END_BOTTOM_Z = 0.035
+DEFAULT_STABLE_VZ_THRESHOLD = 0.05
+DEFAULT_STABLE_WINDOW_S = 0.2
+DEFAULT_APEX_VZ_HYSTERESIS = 0.05
+FALLTHROUGH_BALL_Z = -2.0
 DEFAULT_THICKNESS = 0.1
 DEFAULT_TRAMPOLINE_MASS = 10.0
 DEFAULT_SIM_RESOLUTION = 15
@@ -48,6 +52,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--youngs_modulus", type=float, default=DEFAULT_YOUNGS, help="Young's modulus used for the trampoline material.")
     parser.add_argument("--elasticity_damping", type=float, default=DEFAULT_ELASTICITY_DAMPING, help="Elasticity damping used for the trampoline material.")
     parser.add_argument("--damping_scale", type=float, default=DEFAULT_DAMPING_SCALE, help="Damping scale used for the trampoline material.")
+    parser.add_argument("--stable_vz_threshold", type=float, default=DEFAULT_STABLE_VZ_THRESHOLD, help="Vertical speed threshold for stable-time detection.")
+    parser.add_argument("--stable_window_s", type=float, default=DEFAULT_STABLE_WINDOW_S, help="Required consecutive low-speed duration for stable-time detection.")
+    parser.add_argument("--apex_vz_hysteresis", type=float, default=DEFAULT_APEX_VZ_HYSTERESIS, help="Velocity hysteresis used to arm apex detection and suppress jitter.")
     parser.add_argument("--video", action=argparse.BooleanOptionalAction, default=True, help="Record an MP4 for this run.")
     parser.add_argument("--video_width", type=int, default=DEFAULT_VIDEO_WIDTH, help="Video width in pixels.")
     parser.add_argument("--video_height", type=int, default=DEFAULT_VIDEO_HEIGHT, help="Video height in pixels.")
@@ -345,6 +352,17 @@ def main() -> None:
     impact_vz = float("nan")
     release_vz = float("nan")
     max_rebound = -float("inf")
+    first_apex_found = False
+    apex_armed = False
+    previous_ball_vz = float("nan")
+    first_apex_time_s = float("nan")
+    first_apex_height_m = float("nan")
+    stable_step_count = 0
+    stable_window_steps = max(1, int(round(args_cli.stable_window_s / args_cli.sim_dt)))
+    stable = False
+    stable_time_s = float("nan")
+    stable_ball_z = float("nan")
+    stable_compression = float("nan")
     rows: list[dict[str, Any]] = []
 
     video_writer = None
@@ -378,9 +396,28 @@ def main() -> None:
             else:
                 center_vz = float("nan")
             center_z = float(center_pos[2])
+            compression = float(center_z0 - center_z)
 
             min_center_z = min(min_center_z, center_z)
             min_ball_z = min(min_ball_z, ball_z)
+
+            if not stable:
+                stable_step_count = stable_step_count + 1 if abs(ball_vz) <= args_cli.stable_vz_threshold else 0
+                if stable_step_count >= stable_window_steps:
+                    stable = True
+                    stable_time_s = t
+                    stable_ball_z = ball_z
+                    stable_compression = compression
+
+            if contact_started and not first_apex_found:
+                if ball_vz > args_cli.apex_vz_hysteresis:
+                    apex_armed = True
+                if apex_armed and math.isfinite(previous_ball_vz) and previous_ball_vz > 0.0 and ball_vz <= 0.0:
+                    first_apex_found = True
+                    first_apex_time_s = t
+                    first_apex_height_m = ball_z
+                    apex_armed = False
+            previous_ball_vz = ball_vz
 
             if not contact_started and bottom_z <= CONTACT_START_BOTTOM_Z:
                 contact_started = True
@@ -412,7 +449,10 @@ def main() -> None:
                     "trampoline_center_vx_mps": float(center_vel[0]) if center_vel_tensor is not None else float("nan"),
                     "trampoline_center_vy_mps": float(center_vel[1]) if center_vel_tensor is not None else float("nan"),
                     "trampoline_center_vz_mps": center_vz,
-                    "compression_m": float(center_z0 - center_z),
+                    "compression_m": compression,
+                    "stable": int(stable),
+                    "apex_armed": int(apex_armed),
+                    "first_apex_found": int(first_apex_found),
                     "contact_started": int(contact_started),
                     "released": int(released),
                 }
@@ -424,6 +464,13 @@ def main() -> None:
 
         trajectory_path = timeseries_path
         write_timeseries_csv(trajectory_path, rows)
+
+        fallthrough = min_ball_z < FALLTHROUGH_BALL_Z
+        if fallthrough:
+            stable = False
+            stable_time_s = float("nan")
+            stable_ball_z = float("nan")
+            stable_compression = float("nan")
 
         row = {
             "label": args_cli.label,
@@ -440,6 +487,14 @@ def main() -> None:
             "sim_time": args_cli.sim_time,
             "sim_dt": args_cli.sim_dt,
             "video": int(args_cli.video),
+            "stable": int(stable),
+            "stable_time_s": finite_or_nan(stable_time_s),
+            "stable_ball_z_m": finite_or_nan(stable_ball_z),
+            "stable_compression_m": finite_or_nan(stable_compression),
+            "fallthrough": int(fallthrough),
+            "first_apex_found": int(first_apex_found),
+            "first_apex_time_s": finite_or_nan(first_apex_time_s),
+            "first_apex_height_m": finite_or_nan(first_apex_height_m),
             "contact_started": int(contact_started),
             "released": int(released),
             "contact_start_s": finite_or_nan(contact_start_s),
@@ -448,7 +503,7 @@ def main() -> None:
             "release_vz_mps": finite_or_nan(release_vz),
             "max_compression_m": float(center_z0 - min_center_z),
             "min_ball_z_m": float(min_ball_z),
-            "rebound_height_m": finite_or_nan(max_rebound if released else float("nan")),
+            "rebound_height_m": finite_or_nan(first_apex_height_m),
         }
 
         write_summary_row(summary_path, row)

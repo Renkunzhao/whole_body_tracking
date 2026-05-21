@@ -29,8 +29,8 @@ THICKNESS_VALUES = (0.03, 0.1)
 
 DYNAMIC_METRICS = (
     "max_compression_m",
-    "contact_duration_s",
-    "release_vz_mps",
+    "stable_time_s",
+    "first_apex_time_s",
     "rebound_height_m",
 )
 
@@ -214,8 +214,8 @@ def summarize_groups(rows: list[dict[str, Any]], threshold: float) -> list[dict[
                 saturation_reason = "two_consecutive_stable_steps"
                 break
 
-        if recommended_resolution == "" and not any(int(row["released"]) == 1 for row in group_rows):
-            saturation_reason = "no_release_in_grid"
+        if recommended_resolution == "" and not any(int(row["stable"]) == 1 for row in group_rows):
+            saturation_reason = "no_stable_in_grid"
 
         last_row = group_rows[-1]
         summaries.append(
@@ -224,10 +224,11 @@ def summarize_groups(rows: list[dict[str, Any]], threshold: float) -> list[dict[
                 "recommended_resolution": recommended_resolution,
                 "saturation_reason": saturation_reason,
                 "max_tested_resolution": last_row["resolution"],
-                "last_released": last_row["released"],
+                "last_stable": last_row["stable"],
+                "last_fallthrough": last_row["fallthrough"],
                 "last_max_compression_m": last_row["max_compression_m"],
-                "last_contact_duration_s": last_row["contact_duration_s"],
-                "last_release_vz_mps": last_row["release_vz_mps"],
+                "last_stable_time_s": last_row["stable_time_s"],
+                "last_first_apex_time_s": last_row["first_apex_time_s"],
                 "last_rebound_height_m": last_row["rebound_height_m"],
             }
         )
