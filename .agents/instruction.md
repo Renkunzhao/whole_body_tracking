@@ -46,11 +46,11 @@
 5. **先固定 IsaacLab 中无法随机化或不应 reset-time 随机化的参数。**
    - `simulation_hexahedral_resolution`、`thickness` 等需要首先固定下来。
    - IsaacLab `DeformableBodyPropertiesCfg.contact_offset` 默认是 `None`，表示不显式修改 PhysX 默认值；trampoline 不再手动指定或 sweep 这个参数。
-   - `simulation_hexahedral_resolution` 分辨率应该同时考虑保真度和速度，暂时选为15，如果后面training太慢，保真太低或无法对齐再修改
-      - 可以进行一个测试即在固定当前其他参数的情况下，分辨率增加带来的仿真效果变化（主要是trampoline变软）是否有上限，如果有，那么选择仿真效果基本达到上限时的最小分辨率即可
-      - 测试结果
-         - 固定较低 `Young's modulus=8e4` 时，分辨率升高会明显增加有效柔度；高分辨率下会出现穿膜/掉穿，已知 `resolution=24` 稳定穿膜，`resolution=20` 在 `thickness=0.03` 时穿膜、`thickness=0.1` 时暂未穿膜。
-         - 提高 resolution 不必然导致穿膜；是否失效取决于 `Young's modulus`、厚度、冲击强度和阻尼。后续 saturation 测试把 Young's modulus 边界提高到 `8e5 - 8e6`。
+   - `simulation_hexahedral_resolution` 分辨率应该同时考虑保真度和速度，**当前固定为 15**（训练慢时可降到 10）；分辨率选择不依赖饱和假设，见下方测试结论。
+      - 测试结论（2026-05-21，resolution saturation 实验）：
+         - **饱和假设失败**：提升分辨率会系统性增大形变量，最终导致穿膜，不存在"动态指标收敛到上限"的饱和点。无法用分辨率间的相对变化来判断哪个分辨率更准确，因为没有外部参考真值（实物数据或解析解），高分辨率结果本身也不可信。
+         - 分辨率只有**稳定性上限**（不穿膜的最大值），没有可量化的误差下限；选择依据是计算代价和数值稳定性，而不是收敛性。
+         - `resolution=20–40` 在 `Young's modulus=8e6`、`dt=0.002` 下部分组可 release；`resolution=50` 在所有组全部穿膜（节点数 376–600，dt 不足以稳定）。
          - 旧 `max_compression_m` 指标曾用只按 xy 选出的 center node；厚 mesh 不同 resolution 可能选到 top/bottom 不同 z 层，因此已改为 top-center node 以保证跨分辨率可比。
    - `thickness` 厚度应该优先测试
       - 之前发现在使用dob判断contact的版本，thickness=0.03可能导致train不出来，所以不要低于0.03
@@ -255,9 +255,8 @@
 
 优先选择同时满足以下条件的结构参数：
 
-- ball-drop 有明确 touchdown 和 release。
 - `contact_duration_s`、`max_compression_m`、`rebound_height_m` 没有离群跳变。
-- 不出现静态提前接触、中心大塌陷、no release 等异常。
+- 不出现 drop through 异常。
 - 计算代价可接受，能支持后续批量训练和评测。
 
 ### Phase 1 脚本和输出规范

@@ -192,4 +192,5 @@ IsaacLab/PhysX 中的 `contact_offset` 相当于在可视/物理 mesh 外包裹�
 - `2026-05-20`：确认 IsaacLab `DeformableBodyPropertiesCfg.contact_offset` 默认值为 `None`；移除 trampoline 侧显式 `contact_offset` 配置、Phase 1 CLI 参数和相关 sweep 条件，后续使用 IsaacLab/PhysX 默认接触包络。
 - `2026-05-20`：新增 `scripts/isaaclab_trampoline_resolution_saturation.py`，用于在 rebounce DR 边界参数组下逐步增加 `simulation_hexahedral_resolution`，用 ball-drop 动态指标判断分辨率响应是否达到上限；同时扩展 Phase 1 单条件脚本支持 `--ball_mass`、`--trampoline_mass` 和 `--no-video`。
 - `2026-05-20`：修正 trampoline center node 选择逻辑：从只按 xy 最近改为中心 xy 候选中的最高 z 节点，避免厚 mesh 在不同 resolution 下选到 top/bottom 不同层导致 `max_compression_m` 跨分辨率不可比；同时将 rebounce/resolution saturation 的 Young's modulus sweep 范围从 `8e4-8e5` 提高到 `8e5-8e6`。
+- `2026-05-21`：跑完 resolution saturation 实验（`scripts/isaaclab_trampoline_resolution_saturation.py`，`logs/isaaclab_trampoline_resolution_saturation_runs/20260520_232221__resolution_saturation/`）。结论：饱和假设失败，提升分辨率系统性增大形变量最终穿膜，不存在收敛上限；无外部参考真值，无法量化低分辨率的离散误差下限。分辨率选择只有数值稳定性上限（`res=50` 全组穿膜），没有可量化的误差下限，后续按计算代价固定 `simulation_hexahedral_resolution=15`（训练慢时可降到 10）。
 - 后续每次实验补充：实验次数、仿真器、输出路径、指标结果、失败模式、参数调整、结论。

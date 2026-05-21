@@ -97,6 +97,7 @@ class CheckpointVideoMixin:
         finally:
             writer.close()
             self.train_mode()
+            torch.cuda.empty_cache()
 
         if frame_count == 0:
             print(f"[WARN]: No frames were rendered for checkpoint eval video: {video_path}", flush=True)
@@ -108,8 +109,6 @@ class CheckpointVideoMixin:
                 },
                 step=iteration,
             )
-        with torch.inference_mode():
-            self.env.reset()
         return True
 
     def learn(self, num_learning_iterations: int, init_at_random_ep_len: bool = False):  # noqa: C901
