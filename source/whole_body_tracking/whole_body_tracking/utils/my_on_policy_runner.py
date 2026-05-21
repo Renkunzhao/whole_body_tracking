@@ -75,16 +75,16 @@ class CheckpointVideoMixin:
 
         print(
             f"[INFO]: Recording checkpoint eval video iteration={iteration} "
-            f"steps={rollout_steps} path={video_path}",
+            f"steps={rollout_steps} path= {video_path}",
             flush=True,
         )
         self.eval_mode()
-        obs, _ = self.env.reset()
-        obs = obs.to(self.device)
         frame_count = 0
         writer = imageio.get_writer(video_path, fps=cfg["fps"], macro_block_size=1)
         try:
             with torch.inference_mode():
+                obs, _ = self.env.reset()
+                obs = obs.to(self.device)
                 for step in range(rollout_steps):
                     actions = policy(obs)
                     obs, _, _, _ = self.env.step(actions.to(self.env.device))
@@ -108,7 +108,8 @@ class CheckpointVideoMixin:
                 },
                 step=iteration,
             )
-        self.env.reset()
+        with torch.inference_mode():
+            self.env.reset()
         return True
 
     def learn(self, num_learning_iterations: int, init_at_random_ep_len: bool = False):  # noqa: C901
