@@ -5,6 +5,7 @@ import csv
 import math
 import os
 import re
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -80,6 +81,7 @@ from isaaclab.sensors.camera import Camera, CameraCfg  # noqa: E402
 from isaaclab.utils import configclass  # noqa: E402
 
 from whole_body_tracking.utils.trampoline_deformable import (  # noqa: E402
+    TRAMPOLINE_RADIUS,
     build_trampoline_kinematic_targets,
     make_trampoline_cfg,
     set_trampoline_damping_scales,
@@ -345,6 +347,7 @@ def main() -> None:
     center_z0 = float(trampoline.data.nodal_pos_w[0, center_node_ids[0], 2])
     min_center_z = center_z0
     min_ball_z = float(ball.data.root_pos_w[0, 2])
+    min_ball_z_xy = (float(ball.data.root_pos_w[0, 0]), float(ball.data.root_pos_w[0, 1]))
     contact_started = False
     released = False
     contact_start_s = float("nan")
@@ -373,6 +376,7 @@ def main() -> None:
         video_writer = imageio.get_writer(video_path, fps=args_cli.video_fps, macro_block_size=1)
 
     completed_successfully = False
+    loop_start_time = time.perf_counter()
     try:
         for step in range(int(args_cli.sim_time / args_cli.sim_dt)):
             trampoline.write_nodal_kinematic_target_to_sim(targets)
@@ -399,7 +403,9 @@ def main() -> None:
             compression = float(center_z0 - center_z)
 
             min_center_z = min(min_center_z, center_z)
-            min_ball_z = min(min_ball_z, ball_z)
+            if ball_z < min_ball_z:
+                min_ball_z = ball_z
+                min_ball_z_xy = (float(ball_pos[0]), float(ball_pos[1]))
 
             if not stable:
                 stable_step_count = stable_step_count + 1 if abs(ball_vz) <= args_cli.stable_vz_threshold else 0
@@ -462,11 +468,19 @@ def main() -> None:
                 frame = _as_numpy_rgb(camera.data.output["rgb"])  # type: ignore[index]
                 video_writer.append_data(frame)
 
+        wall_time_s = time.perf_counter() - loop_start_time
         trajectory_path = timeseries_path
         write_timeseries_csv(trajectory_path, rows)
 
-        fallthrough = min_ball_z < FALLTHROUGH_BALL_Z
-        if fallthrough:
+        dropped_below = min_ball_z < FALLTHROUGH_BALL_Z
+        if dropped_below:
+            min_ball_z_r = math.sqrt(min_ball_z_xy[0] ** 2 + min_ball_z_xy[1] ** 2)
+            fell_off_edge = min_ball_z_r >= TRAMPOLINE_RADIUS
+            fallthrough = dropped_below and not fell_off_edge
+        else:
+            fell_off_edge = False
+            fallthrough = False
+        if fallthrough or fell_off_edge:
             stable = False
             stable_time_s = float("nan")
             stable_ball_z = float("nan")
@@ -486,12 +500,16 @@ def main() -> None:
             "damping_scale": args_cli.damping_scale,
             "sim_time": args_cli.sim_time,
             "sim_dt": args_cli.sim_dt,
+            "wall_time_s": round(wall_time_s, 2),
             "video": int(args_cli.video),
             "stable": int(stable),
             "stable_time_s": finite_or_nan(stable_time_s),
             "stable_ball_z_m": finite_or_nan(stable_ball_z),
             "stable_compression_m": finite_or_nan(stable_compression),
             "fallthrough": int(fallthrough),
+            "fell_off_edge": int(fell_off_edge),
+            "min_ball_z_x_m": min_ball_z_xy[0],
+            "min_ball_z_y_m": min_ball_z_xy[1],
             "first_apex_found": int(first_apex_found),
             "first_apex_time_s": finite_or_nan(first_apex_time_s),
             "first_apex_height_m": finite_or_nan(first_apex_height_m),
