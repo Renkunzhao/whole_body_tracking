@@ -190,7 +190,7 @@ class Go2HoppingEnv(DirectRLEnv):
             self._trampoline_targets, self._trampoline_pinned_mask, self._trampoline_center_node_ids = build_trampoline_kinematic_targets(
                 self._trampoline.data.default_nodal_state_w,
                 self._trampoline.data.nodal_kinematic_target,
-                pin_width=self.cfg.trampoline_pin_width,
+                pin_radius=self.cfg.usable_radius,
             )
             reset_deformable_trampoline(self._trampoline, self._trampoline_targets)
             self._setup_trampoline_dr()

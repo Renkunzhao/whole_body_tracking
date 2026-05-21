@@ -7,6 +7,7 @@ import csv
 import math
 import os
 import sys
+from datetime import datetime
 
 from isaaclab.app import AppLauncher
 
@@ -30,6 +31,12 @@ parser.add_argument("--damping_scale", type=float, default=None, help="Fix tramp
 parser.add_argument("--poissons_ratio", type=float, default=None, help="Fix trampoline Poisson's ratio during play.")
 parser.add_argument("--video", action="store_true", default=False, help="Record a real-time video of the play loop.")
 parser.add_argument("--video_length", type=int, default=500, help="Length of the recorded video (in env steps).")
+parser.add_argument(
+    "--hide_trampoline_nodes",
+    action="store_true",
+    default=False,
+    help="Hide pinned/free trampoline node markers in the viewer.",
+)
 # append RSL-RL cli arguments
 cli_args.add_rsl_rl_args(parser)
 # append AppLauncher cli args
@@ -71,6 +78,11 @@ from analyze_rebounce_play import analyze_rebounce_play
 from whole_body_tracking.sensors import create_dob_contact_sensor, get_or_create_dob_contact_sensor
 from whole_body_tracking.utils.exporter import attach_onnx_metadata, get_policy_export_normalizer
 from whole_body_tracking.utils.task_utils import apply_play_overrides
+from whole_body_tracking.utils.trampoline_deformable import (
+    build_trampoline_kinematic_targets,
+    build_trampoline_node_visualizers,
+    update_trampoline_node_visualizers,
+)
 
 
 CONTACT_FORCE_FOOT_NAMES = ("FL_foot", "FR_foot", "RL_foot", "RR_foot")
@@ -142,6 +154,38 @@ def _print_trampoline_params(env, reset_count: int):
     _maybe_print_property(parts, randomizer, "last_damping_scales", "ds", ".2f")
     _maybe_print_property(parts, randomizer, "last_poissons_ratios", "nu", ".2f")
     print(f"[TRAMP R{reset_count:03d}] " + " ".join(parts), flush=True)
+
+
+def _setup_trampoline_node_visualization(env):
+    if args_cli.hide_trampoline_nodes:
+        return None
+    try:
+        trampoline = env.unwrapped.scene["trampoline"]
+    except (KeyError, AttributeError):
+        return None
+
+    try:
+        _, pinned_mask, _ = build_trampoline_kinematic_targets(
+            trampoline.data.default_nodal_state_w,
+            trampoline.data.nodal_kinematic_target,
+        )
+        pinned_visualizer, free_visualizer = build_trampoline_node_visualizers()
+    except (AttributeError, RuntimeError) as exc:
+        print(f"[WARN]: Failed to initialize trampoline node markers: {exc}", flush=True)
+        return None
+
+    pinned_count = int(pinned_mask[0].sum().item())
+    free_count = int((~pinned_mask[0]).sum().item())
+    print(f"[INFO]: Trampoline node markers enabled: pinned={pinned_count}, free={free_count}", flush=True)
+    update_trampoline_node_visualizers(trampoline, pinned_mask, pinned_visualizer, free_visualizer)
+    return trampoline, pinned_mask, pinned_visualizer, free_visualizer
+
+
+def _update_trampoline_node_visualization(runtime) -> None:
+    if runtime is None:
+        return
+    trampoline, pinned_mask, pinned_visualizer, free_visualizer = runtime
+    update_trampoline_node_visualizers(trampoline, pinned_mask, pinned_visualizer, free_visualizer)
 
 
 class RebouncePlayCsvLogger:
@@ -554,7 +598,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     # wrap with RecordVideo on the raw gym env, before RL-specific wrappers
     if args_cli.video:
         video_folder = play_output_dir
-        video_name_prefix = "rebounce_play"
+        video_name_prefix = f"rebounce_play_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
         video_kwargs = {
             "video_folder": video_folder,
             "step_trigger": lambda step: step == 0,
@@ -602,6 +646,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
     obs, _ = env.reset()
     hop_command, energy_command = _get_rebounce_debug_handles(env)
+    trampoline_node_visualization = _setup_trampoline_node_visualization(env)
     reset_count = 0
     _print_trampoline_params(env, reset_count)
     apex_count = 0
@@ -633,6 +678,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             with torch.inference_mode():
                 actions = policy(obs)
             obs, _, dones, _ = env.step(actions)
+            _update_trampoline_node_visualization(trampoline_node_visualization)
             play_step_count += 1
             for sensor in contact_sensors.values():
                 sensor.update()

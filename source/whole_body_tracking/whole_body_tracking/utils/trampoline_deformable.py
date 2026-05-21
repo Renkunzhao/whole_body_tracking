@@ -10,7 +10,7 @@ TRAMPOLINE_RADIUS = 1.5
 TRAMPOLINE_THICKNESS = 0.1
 TRAMPOLINE_TOP_Z = 0.0
 TRAMPOLINE_CENTER_Z = TRAMPOLINE_TOP_Z - 0.5 * TRAMPOLINE_THICKNESS
-TRAMPOLINE_PIN_WIDTH = 0.4
+TRAMPOLINE_PIN_RADIUS = TRAMPOLINE_RADIUS
 TRAMPOLINE_MASS = 10.0
 TRAMPOLINE_YOUNGS_MODULUS = 8.0e4
 TRAMPOLINE_SIM_RESOLUTION = 15
@@ -19,18 +19,22 @@ TRAMPOLINE_SIM_RESOLUTION = 15
 def make_trampoline_cfg(
     prim_path: str,
     *,
-    center_z: float = TRAMPOLINE_CENTER_Z,
+    center_z: float | None = None,
+    thickness: float = TRAMPOLINE_THICKNESS,
     mass: float = TRAMPOLINE_MASS,
     youngs_modulus: float = TRAMPOLINE_YOUNGS_MODULUS,
     sim_resolution: int = TRAMPOLINE_SIM_RESOLUTION,
     debug_vis: bool = False,
 ) -> DeformableObjectCfg:
     """Create the shared deformable trampoline configuration."""
+    if center_z is None:
+        center_z = TRAMPOLINE_TOP_Z - 0.5 * thickness
+
     return DeformableObjectCfg(
         prim_path=prim_path,
         spawn=sim_utils.MeshCylinderCfg(
             radius=TRAMPOLINE_RADIUS,
-            height=TRAMPOLINE_THICKNESS,
+            height=thickness,
             axis="Z",
             mass_props=sim_utils.MassPropertiesCfg(mass=mass),
             deformable_props=sim_utils.DeformableBodyPropertiesCfg(
@@ -41,7 +45,6 @@ def make_trampoline_cfg(
                 settling_threshold=0.02,
                 self_collision=False,
                 simulation_hexahedral_resolution=sim_resolution,
-                contact_offset=0.01,
                 rest_offset=0.0,
             ),
             visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.15, 0.35, 0.95), metallic=0.05),
@@ -61,19 +64,22 @@ def make_trampoline_cfg(
 def build_trampoline_kinematic_targets(
     default_nodal_state_w: torch.Tensor,
     nodal_kinematic_target: torch.Tensor,
-    pin_width: float = TRAMPOLINE_PIN_WIDTH,
+    pin_radius: float | torch.Tensor = TRAMPOLINE_PIN_RADIUS,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Create kinematic targets that pin the outer rim of a deformable trampoline."""
+    """Create kinematic targets that pin nodes outside the usable trampoline radius."""
     targets = nodal_kinematic_target.clone()
     targets[..., :3] = default_nodal_state_w[..., :3]
     targets[..., 3] = 1.0
 
     nodal_pos = default_nodal_state_w[..., :3]
-    center_xy = nodal_pos[..., :2].mean(dim=1, keepdim=True)
+    xy_min = nodal_pos[..., :2].amin(dim=1, keepdim=True)
+    xy_max = nodal_pos[..., :2].amax(dim=1, keepdim=True)
+    center_xy = 0.5 * (xy_min + xy_max)
     radial_distance = torch.linalg.vector_norm(nodal_pos[..., :2] - center_xy, dim=-1)
 
-    rim_radius = radial_distance.max(dim=1, keepdim=True).values
-    pin_threshold = torch.clamp(rim_radius - pin_width, min=0.0)
+    pin_radius_column = _as_column_tensor(pin_radius, device=radial_distance.device).to(dtype=radial_distance.dtype)
+    edge_radius = radial_distance.max(dim=1, keepdim=True).values
+    pin_threshold = torch.minimum(torch.clamp(pin_radius_column, min=0.0), edge_radius)
     pinned_mask = radial_distance >= pin_threshold
     center_node_ids = radial_distance.argmin(dim=1)
 
@@ -168,7 +174,11 @@ def get_trampoline_poissons_ratios(material_view) -> torch.Tensor:
     return _get_trampoline_material_property(material_view, "get_poissons_ratios", "get_poissons_ratio")
 
 
-def _as_column_tensor(values: torch.Tensor, *, device: str | torch.device | None = None) -> torch.Tensor:
+def _as_column_tensor(
+    values: float | torch.Tensor,
+    *,
+    device: str | torch.device | None = None,
+) -> torch.Tensor:
     """Convert material properties to the column layout expected by the PhysX tensor API."""
     tensor = torch.as_tensor(values, dtype=torch.float32)
     if device is not None:

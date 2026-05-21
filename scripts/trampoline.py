@@ -37,12 +37,6 @@ parser.add_argument(
 )
 # built-in deformable trampoline options
 parser.add_argument(
-    "--pin_width",
-    type=float,
-    default=None,
-    help="Pinned rim width in meters for the deformable trampoline. Defaults to the shared trampoline config.",
-)
-parser.add_argument(
     "--youngs_modulus",
     type=float,
     default=None,
@@ -103,7 +97,6 @@ from whole_body_tracking.robots.go2 import GO2_CFG
 from whole_body_tracking.utils.point_foot_contact_force import PointFootContactForceCfg, PointFootContactForceModel
 from whole_body_tracking.utils.trampoline_deformable import (
     TRAMPOLINE_MASS,
-    TRAMPOLINE_PIN_WIDTH,
     TRAMPOLINE_SIM_RESOLUTION,
     TRAMPOLINE_THICKNESS,
     TRAMPOLINE_YOUNGS_MODULUS,
@@ -114,8 +107,6 @@ from whole_body_tracking.utils.trampoline_deformable import (
 )
 
 
-if args_cli.pin_width is None:
-    args_cli.pin_width = TRAMPOLINE_PIN_WIDTH
 if args_cli.youngs_modulus is None:
     args_cli.youngs_modulus = TRAMPOLINE_YOUNGS_MODULUS
 if args_cli.mass is None:
@@ -445,7 +436,6 @@ def main() -> None:
         trampoline_targets, trampoline_pinned_mask, trampoline_center_node_ids = build_trampoline_kinematic_targets(
             trampoline.data.default_nodal_state_w,
             trampoline.data.nodal_kinematic_target,
-            pin_width=args_cli.pin_width,
         )
         trampoline_pinned_node_visualizer, trampoline_free_node_visualizer = build_trampoline_node_visualizers()
 

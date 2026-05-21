@@ -20,6 +20,14 @@ parser = argparse.ArgumentParser(description="Train an RL agent with RSL-RL.")
 parser.add_argument("--video", action="store_true", default=False, help="Record videos during training.")
 parser.add_argument("--video_length", type=int, default=200, help="Length of the recorded video (in steps).")
 parser.add_argument("--video_interval", type=int, default=2000, help="Interval between video recordings (in steps).")
+parser.add_argument(
+    "--checkpoint_video",
+    action=argparse.BooleanOptionalAction,
+    default=True,
+    help="Record and upload a fixed-length eval video whenever a checkpoint is saved.",
+)
+parser.add_argument("--checkpoint_video_length_s", type=float, default=10.0, help="Checkpoint eval video length in seconds.")
+parser.add_argument("--checkpoint_video_fps", type=int, default=30, help="Checkpoint eval video frame rate.")
 parser.add_argument("--num_envs", type=int, default=None, help="Number of environments to simulate.")
 parser.add_argument("--task", type=str, default=None, help="Name of the task.")
 parser.add_argument("--seed", type=int, default=None, help="Seed used for the environment")
@@ -32,8 +40,8 @@ cli_args.add_rsl_rl_args(parser)
 AppLauncher.add_app_launcher_args(parser)
 args_cli, hydra_args = parser.parse_known_args()
 
-# always enable cameras to record video
-if args_cli.video:
+# cameras are required for training videos and checkpoint eval videos
+if args_cli.video or args_cli.checkpoint_video:
     args_cli.enable_cameras = True
 
 # clear out sys.argv for Hydra
@@ -207,7 +215,8 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     log_dir = os.path.join(log_root_path, log_dir)
 
     # create isaac environment
-    env = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None)
+    render_mode = "rgb_array" if args_cli.video or args_cli.checkpoint_video else None
+    env = gym.make(args_cli.task, cfg=env_cfg, render_mode=render_mode)
     _install_render_toggle_hotkey("V")
     # wrap for video recording
     if args_cli.video:
@@ -240,6 +249,14 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         runner = MyOnPolicyRunner(env, agent_cfg.to_dict(), log_dir=log_dir, device=agent_cfg.device)
     else:
         raise ValueError(f"Unsupported RSL-RL runner class: {runner_class_name}")
+
+    if hasattr(runner, "configure_checkpoint_video"):
+        runner.configure_checkpoint_video(
+            enabled=args_cli.checkpoint_video,
+            output_dir=os.path.join(log_dir, "videos", "checkpoint_eval"),
+            length_s=args_cli.checkpoint_video_length_s,
+            fps=args_cli.checkpoint_video_fps,
+        )
 
     # write git state to logs
     runner.add_git_repo_to_log(__file__)
