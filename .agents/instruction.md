@@ -1,67 +1,67 @@
 # Trampoline cross-sim calibration instructions
 
-## 目标
+## Goal
 
-在 IsaacLab 中训练 hopping policy，在 MuJoCo 中测试，再逐步上实物。当前问题不是“视觉上像不像”，而是两种仿真器里的 trampoline 行为在动力学上不一致，所以需要先把**可观测行为**量化，再谈参数对照和 DR 扩展。
+Train a hopping policy in IsaacLab, test it in MuJoCo, then gradually deploy to hardware. The current problem is not "visual similarity" but dynamic inconsistency of trampoline behavior between the two simulators. We must first quantify **observable behavior**, then discuss parameter alignment and DR expansion.
 
-## 文档分工
+## Document responsibilities
 
-- 当前长期计划、指标定义、参数映射、执行原则：`.agents/instruction.md`
-- 实验日志、结果表、失败模式、修改记录：`.agents/logs.md`
+- Long-term plan, metric definitions, parameter mappings, execution principles: `.agents/instruction.md`
+- Experiment logs, result tables, failure modes, change history: `.agents/logs.md`
 
-每次记录实验日志时必须写清：
+Every experiment log entry must include:
 
-- 这次跑了几次实验
-- 在哪个仿真器里跑的
-- 输出目录或 CSV 路径
-- 主要指标和结论
+- Number of runs
+- Which simulator
+- Output directory or CSV path
+- Key metrics and conclusions
 
-## 当前代码落点
+## Code locations
 
-- IsaacLab trampoline：`source/whole_body_tracking/whole_body_tracking/utils/trampoline_deformable.py`
-- MuJoCo trampoline：`/home/rkz/code/unitree_ws/src/unitree_mujoco/unitree_robots/go2/trampoline.xml`
-- MuJoCo ball-drop sweep：`scripts/mujoco_ball_drop_trampoline_sweep.py`
-- IsaacLab material/reset-time ball-drop sweep：`scripts/isaaclab_ball_drop_trampoline_sweep.py`
-- IsaacLab Phase 1 单条件脚本：`scripts/isaaclab_trampoline_phase1_condition.py`
-- IsaacLab Phase 1 driver：`scripts/isaaclab_trampoline_phase1_sweep.py`
-- 现有 policy 评测脚本：`scripts/rsl_rl/eval-rebounce.py`
-- 相关部署/解释文档：`.codex/skills/trampoline/task6-mujoco-deploy.md`
+- IsaacLab trampoline: `source/whole_body_tracking/whole_body_tracking/utils/trampoline_deformable.py`
+- MuJoCo trampoline: `/home/rkz/code/unitree_ws/src/unitree_mujoco/unitree_robots/go2/trampoline.xml`
+- MuJoCo ball-drop sweep: `scripts/mujoco_ball_drop_trampoline_sweep.py`
+- IsaacLab material/reset-time ball-drop sweep: `scripts/isaaclab_ball_drop_trampoline_sweep.py`
+- IsaacLab Phase 1 single-condition script: `scripts/isaaclab_trampoline_phase1_condition.py`
+- IsaacLab Phase 1 driver: `scripts/isaaclab_trampoline_phase1_sweep.py`
+- Existing policy evaluation script: `scripts/rsl_rl/eval-rebounce.py`
+- Related deployment/explanation doc: `.codex/skills/trampoline/task6-mujoco-deploy.md`
 
-## 阶段性结论
+## Interim conclusions
 
-1. **两种模型不是同一类参数化。**
-   - IsaacLab 是体积 FEM / deformable object，参数是 `resolution`, `thickness`, `Young's modulus & mass`, `damping`, `possion`, `friction` 。 
-   - MuJoCo 这里是 `flexcomp`，更像“离散柔性网格 + 约束/接触求解”的模型，关键参数是 `count / spacing / radius / mass / edge solref / edge solimp`。
-   - 经验映射关系，下面只是**粗对照**，不是严格等价：
+1. **The two models use different parameterizations.**
+   - IsaacLab uses volumetric FEM / deformable object; parameters are `resolution`, `thickness`, `Young's modulus & mass`, `damping`, `poisson`, `friction`.
+   - MuJoCo uses `flexcomp`, closer to a "discrete flexible mesh + constraint/contact solver" model; key parameters are `count / spacing / radius / mass / edge solref / edge solimp`.
+   - Empirical mapping — **rough correspondence only**, not strict equivalence:
 
-| IsaacLab | MuJoCo | 说明 |
+| IsaacLab | MuJoCo | Notes |
 |---|---|---|
-| `youngs_modulus` | `solref / solimp`、边约束刚度 | 都会影响整体软硬 |
-| `elasticity_damping` / `damping_scale` | 边约束阻尼、接触衰减 | 都会影响回弹速度和能量损失 |
-| `mass` | `mass` | 可直接对照 |
-| IsaacLab default contact offset | `radius` / 接触几何厚度 | IsaacLab 侧不再手动指定；MuJoCo `radius` 仍影响接触包络 |
-| `simulation_hexahedral_resolution` | `count` | 都影响离散程度和局部响应 |
-| usable pin radius / edge pinning | pinned rim nodes / pin 选择 | 都影响边界约束范围；实物半径固定时不应作为 sweep 参数 |
+| `youngs_modulus` | `solref / solimp`, edge constraint stiffness | Both affect overall stiffness |
+| `elasticity_damping` / `damping_scale` | Edge constraint damping, contact decay | Both affect rebound speed and energy loss |
+| `mass` | `mass` | Direct comparison |
+| IsaacLab default contact offset | `radius` / contact geometry thickness | IsaacLab side no longer set manually; MuJoCo `radius` still affects contact envelope |
+| `simulation_hexahedral_resolution` | `count` | Both affect discretization and local response |
+| usable pin radius / edge pinning | pinned rim nodes / pin selection | Both affect boundary constraint range; should not be swept when physical radius is fixed |
 
-2. **不能只按外观一一对应。**
-   - 相同外观不代表相同接触时序、能量返还、压缩量、回弹相位。
-   - 因此对照应基于指标，而不是先验假设某个参数完全等价。
-3. **最重要的是先做“响应对齐”，再做 policy 对齐。**
-   - 先测 trampoline 自身的静态/动态响应。
-   - 再测 robot drop / hop 过程中的相位、冲量和姿态稳定性。
-4. **固定边缘 pinning 规则**
-   - 实物有效半径固定为 `1.5 m`，所以不再把 `pin_width` 当作可调参数。
-   - 代码应先根据实际网格节点计算边缘半径 `edge_radius = max(||node_xy - center_xy||)`，再固定所有 `radial_distance >= min(usable_radius, edge_radius)` 的边缘节点。
-   - 当前 `usable_radius = 1.5`；如果网格边缘半径大于 1.5，则固定 1.5 m 外侧的节点；如果离散化导致边缘半径小于等于 1.5，则至少固定最外圈边缘节点。
-   - 这个规则和 `simulation_hexahedral_resolution` 相关：不同分辨率会改变边缘节点分布，但不应该通过手调 `pin_width` 改变实物有效半径。
-5. **先固定 IsaacLab 中无法随机化或不应 reset-time 随机化的参数。**
-   - `simulation_hexahedral_resolution`、`thickness` 等需要首先固定下来。
-   - IsaacLab `DeformableBodyPropertiesCfg.contact_offset` 默认是 `None`，表示不显式修改 PhysX 默认值；trampoline 不再手动指定或 sweep 这个参数。
-   - `simulation_hexahedral_resolution` 分辨率应该同时考虑保真度和速度，**当前固定为 15**（训练慢时可降到 10）；分辨率选择不依赖饱和假设，见下方测试结论。
-   - `thickness` 
+2. **Cannot map parameters one-to-one by appearance.**
+   - Same appearance does not mean same contact timing, energy return, compression, or rebound phase.
+   - Alignment should be based on metrics, not prior assumptions of parameter equivalence.
+3. **"Response alignment" must come before policy alignment.**
+   - First measure static/dynamic trampoline response.
+   - Then measure contact phase, impulse, and attitude stability during robot drop/hop.
+4. **Fixed edge pinning rule**
+   - Physical usable radius is fixed at `1.5 m`, so `pin_width` is no longer a tunable parameter.
+   - Code should first compute `edge_radius = max(||node_xy - center_xy||)` from actual mesh nodes, then pin all nodes with `radial_distance >= min(usable_radius, edge_radius)`.
+   - Current `usable_radius = 1.5`; if mesh edge radius > 1.5, pin nodes outside 1.5 m; if discretization makes edge radius ≤ 1.5, pin at least the outermost ring.
+   - This rule interacts with `simulation_hexahedral_resolution`: different resolutions change edge node distribution, but the physical usable radius must not be changed by manually tuning `pin_width`.
+5. **Fix IsaacLab parameters that cannot or should not be randomized at reset time first.**
+   - `simulation_hexahedral_resolution`, `thickness`, etc. must be fixed before material sweeps.
+   - IsaacLab `DeformableBodyPropertiesCfg.contact_offset` defaults to `None`, meaning no explicit override of the PhysX default; trampoline no longer sets or sweeps this parameter.
+   - `simulation_hexahedral_resolution` should balance fidelity and speed; **currently fixed at 15** (can be reduced to 10 if training is too slow). Resolution selection does not rely on a saturation assumption — see test conclusions below.
+   - `thickness`
 
 
-## 当前配置摘要
+## Current configuration summary
 
 ### IsaacLab
 
@@ -70,7 +70,7 @@
 
 - radius: `1.5`
 - usable pin radius: `1.5`
-- pinned nodes: 自动固定 `radial_distance >= min(usable_radius, edge_radius)` 的节点
+- pinned nodes: automatically pin nodes with `radial_distance >= min(usable_radius, edge_radius)`
 - contact offset: IsaacLab default (`DeformableBodyPropertiesCfg.contact_offset=None`)
 - sim resolution: `15`
 - thickness: `0.1`
@@ -94,63 +94,85 @@
 - edge constraint: `solimp="0.8 0.9 0.001 0.1 6"`
 
 
-## Phase 1：IsaacLab 固定结构参数研究计划
+## Phase 1: IsaacLab fixed structural parameter study
 
-目标：先确定 reset 时无法或不应随机化的结构/离散化参数，避免后续材料参数 sweep 被接触几何和边界条件污染，包括 `resolution`, `thickness`。
+Goal: identify structural/discretization parameters that cannot or should not be randomized at reset time, to avoid contaminating subsequent material parameter sweeps with contact geometry and boundary condition artifacts. Covers `resolution` and `thickness`.
 
-### Ball-drop 对比指标及注意事项
-不同质量球，从多个高度下落，isaaclab 没有 rigid-deformable 接触力传感器，只能依靠速度来判断状态
+### Ball-drop metrics and notes
 
-| 指标 | 建议定义 |
+Balls of different masses dropped from multiple heights. IsaacLab has no rigid-deformable contact force sensor, so state must be inferred from velocity.
+
+| Metric | Definition |
 |---|---|
-| 静态下沉量 | 在无压缩时 top-center 节点位置 | 理论应该是0, 反映弹簧自身重力影响 |
-| 首次压缩最低点，时间 | 从 `t=0` 开始，小球第一次竖直速度 `|vz|`从负到正时的位置，时间 |
-| 首次回弹高度，时间 | 从 `t=0` 开始，小球第一次竖直速度 `|vz|`从正到负时的位置，时间 |
-| 阻尼比/衰减率 | 第二次回弹高度的幅值衰减 |
-| 最终状态 | 穿膜，掉下边缘，是否稳定 |
-| 稳定位置，时间 | 从 `t=0` 开始，小球竖直速度 `|vz|` 连续低于阈值一段时间的位置，时间 |
+| Static sag | Top-center node position before any compression — should be ~0; reflects mesh self-weight |
+| First compression minimum, time | Position and time when ball `vz` first crosses zero from negative to positive |
+| First rebound apex, time | Position and time when ball `vz` first crosses zero from positive to negative |
+| Damping ratio | Amplitude decay from first apex to second apex |
+| Final state | Fallthrough, fell off edge, or stable |
+| Stable position, time | Position and time when `|vz|` stays below threshold for a continuous window |
 
-### Resolution 
+### Resolution
 
-- Saturation 测试
+- Saturation test
 
-1. 固定其他参数，逐步增加 `simulation_hexahedral_resolution`，用 ball-drop 动态指标判断“分辨率增加带来的变软/响应变化是否达到上限”。
-2. 条件：小球质量为 G1 URDF 总质量的一半（当前约 `16.67 kg`），小球高度 `1.0 m`；只组合 `thickness=0.03/0.10`、`mass+youngs_modulus` 的 DR 上下限、`elasticity_damping+damping_scale` 的 DR 上下限；当前 Young's modulus sweep 边界为 `8e5 / 8e6`。
-3. 如果各参数组在某个 resolution 后 top-center `max_compression_m`、`stable_time_s`、`first_apex_time_s`、`rebound_height_m` 连续两档相对变化都小于阈值（默认 `5%`），则认为该组基本达到上限；只有所有组都有推荐值时才输出全局候选分辨率，并取各组推荐值的最大值。
+1. Fix all other parameters, sweep `simulation_hexahedral_resolution`, and use ball-drop dynamic metrics to determine whether the softening effect of increasing resolution reaches a saturation limit.
+2. Conditions: ball mass = half of G1 URDF total mass (~`16.67 kg`), ball height = `1.0 m`; combine `thickness=0.03/0.10` with DR boundary values of `mass+youngs_modulus` and `elasticity_damping+damping_scale`; Young's modulus sweep range `8e5 / 8e6`.
+3. If for a given group all four top-center metrics (`max_compression_m`, `stable_time_s`, `first_apex_time_s`, `rebound_height_m`) change by less than the threshold (default `5%`) for two consecutive resolution steps, the group is considered saturated. A global candidate resolution is output only when all groups have a recommendation; the maximum across groups is taken.
 
-- 测试结论（2026-05-21）：
-   - **饱和假设失败**：提升分辨率会系统性增大形变量，最终导致穿膜，不存在"动态指标收敛到上限"的饱和点。无法用分辨率间的相对变化来判断哪个分辨率更准确，因为没有外部参考真值（实物数据或解析解），高分辨率结果本身也不可信。
-   - 分辨率只有**稳定性上限**（不穿膜的最大值），没有可量化的误差下限；选择依据是计算代价和数值稳定性，而不是收敛性。
-   - `resolution=20–40` 在 `Young's modulus=8e6`、`dt=0.002` 下部分组可 release；`resolution=50` 在所有组全部穿膜（节点数 376–600，dt 不足以稳定）。
-   - 旧 `max_compression_m` 指标曾用只按 xy 选出的 center node；厚 mesh 不同 resolution 可能选到 top/bottom 不同 z 层，因此已改为 top-center node 以保证跨分辨率可比。
+- Test conclusions (2026-05-21):
+   - **Saturation hypothesis failed**: increasing resolution systematically increases deformation, eventually causing fallthrough. There is no saturation point where dynamic metrics converge to an upper limit. Relative changes between resolution levels cannot be used to judge which resolution is more accurate, because there is no external ground truth (physical measurements or analytic solutions), and high-resolution results are themselves unreliable.
+   - Resolution has only a **stability upper limit** (maximum that avoids fallthrough), no quantifiable error lower bound. The selection criterion is computational cost and numerical stability, not convergence.
+   - `resolution=20–40` with `Young's modulus=8e6` and `dt=0.002` allows some groups to release; `resolution=50` causes fallthrough in all groups (376–600 nodes, dt insufficient for stability).
+   - The old `max_compression_m` metric selected center nodes by xy only; thick meshes at different resolutions may select top or bottom z layers differently. Changed to top-center node to ensure cross-resolution comparability.
 
 ### Thickness
-在较大范围 0.03 - 0.3 测试厚度对仿真速度和ball drop指标的影响
 
-注意事项： 
-- 研究仿真速度，因为怕厚度高了相同分辨率导致节点增加
-- 之前发现在使用dob判断contact的版本，thickness=0.03可能导致train不出来，且 thick 太小容易穿膜，所以确定 thick 之后仍需要后续确认
-   - 测试 g1/go2 fixed PD 时是否有穿膜 
-   - 测试能否训练出可以跳跃的policy
+Test the effect of thickness on simulation speed and ball-drop metrics over the range 0.03–0.3.
 
-### 脚本和输出规范
+Notes:
+- Investigate simulation speed, since higher thickness at the same resolution may increase node count.
+- Previous finding with DOB contact detection: `thickness=0.03` may prevent successful training, and very small thickness is prone to fallthrough. After fixing thickness, the following must still be confirmed:
+   - Whether fallthrough occurs with g1/go2 fixed PD
+   - Whether a hopping policy can be trained
 
-- 单条件脚本：`scripts/isaaclab_trampoline_phase1_condition.py`
-- Phase 1 driver：`scripts/isaaclab_trampoline_phase1_sweep.py`
-- Resolution saturation driver：`scripts/isaaclab_trampoline_resolution_saturation.py`
-- 单次运行 artifact 根目录：`logs/isaaclab_trampoline_phase1_runs/`
-- Resolution saturation artifact 根目录：`logs/isaaclab_trampoline_resolution_saturation_runs/`
-- 每次单条件运行会按时间和参数创建独立文件夹，目录名包含 `label / sim_time / sim_dt / ball_height / ball_mass / sim_resolution / thickness / trampoline_mass / youngs_modulus / elasticity_damping / damping_scale`。
-- 单次运行文件夹内包含：
-  - `phase1_summary.csv`：单次 summary 指标。
-  - `phase1_trajectory.csv`：逐步记录小球位置/速度、trampoline top-center 位置/速度、compression、stable/apex/contact/release 标志。
-  - `phase1_vertical_state.png`：小球和 trampoline 中心点竖直位置/速度的 2x1 图。
-  - `phase1_compression.png`：trampoline 中心压缩量图。
-  - `phase1_video.mp4`：视频。
-- CSV 路径由运行目录自动生成，不通过 `--output` 手动指定。
-- Resolution saturation 汇总输出：`resolution_saturation_runs.csv` 和 `resolution_saturation_group_summary.csv`。
+- Test conclusions (2026-05-21, res=15, E=8e6, ed=0.01, tm=15, ball_mass=16.67 kg, ball_height=1.0 m, `--no-video`)
+- Artifact: `logs/isaaclab_trampoline_phase1_runs/thickness_sweep/`
 
-示例命令：
+| thickness | wall_time_s | pinned_nodes | static_sag_m | first_min_ball_z_m | first_min_time_s | first_apex_height_m | first_apex_time_s | second_apex_height_m | damping_ratio | max_compression_m | stable_time_s | anomaly |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|
+| 0.03 | 53.2 | 120 | -0.003 | -0.132 | 0.518 | 0.182 | 0.798 | 0.044 | 0.240 | 0.152 | 2.20 | — |
+| 0.05 | 52.8 | 120 | -0.003 | -0.150 | 0.524 | 0.173 | 0.810 | 0.020 | 0.117 | 0.170 | 1.91 | — |
+| 0.10 | 53.4 | 120 | -0.003 | -0.127 | 0.512 | 0.200 | 0.794 | 0.033 | 0.165 | 0.158 | 1.85 | — |
+| 0.15 | 53.8 | 120 | -0.003 | -0.083 | 0.496 | 0.198 | 0.754 | 0.045 | 0.225 | 0.103 | 1.78 | — |
+| 0.20 | 52.7 | 120 | -0.003 | -0.054 | 0.484 | 0.187 | 0.720 | 0.048 | 0.258 | 0.083 | — | fell_off_edge |
+| 0.30 | 57.4 | 180 | -0.003 | -0.049 | 0.480 | 0.213 | 0.724 | 0.059 | 0.279 | 0.062 | 1.64 | node count increased to 180 |
+
+Key conclusions:
+- **wall_time_s is nearly identical across 0.03–0.20 (52–54 s)**; thickness=0.30 is slightly slower (57.4 s) primarily because node count increases from 120 to 180. Thickness itself has little effect on computational cost.
+- **Greater thickness → shallower compression, earlier contact end**: `first_min_ball_z_m` increases monotonically from -0.132 m to -0.049 m; `first_min_time_s` shifts earlier from 0.524 s to 0.480 s.
+- **Rebound apex height (`first_apex_height_m`) is insensitive to thickness**, ranging 0.17–0.21 m with no clear trend.
+- **thickness=0.20 produced fell_off_edge** (ball slid off the edge, not a fallthrough); all other conditions reached stable. Cause unknown — possibly related to res=15 edge node layout at this thickness.
+- **thickness=0.30 increases node count to 180**, slightly higher wall_time, and the highest `second_apex_height_m` (0.059 m), indicating slowest energy decay.
+- **Current default thickness=0.10** is a reasonable choice: 120 nodes, wall_time ~53 s, moderate compression, numerically stable.
+
+### Scripts and output conventions
+
+- Single-condition script: `scripts/isaaclab_trampoline_phase1_condition.py`
+- Phase 1 driver: `scripts/isaaclab_trampoline_phase1_sweep.py`
+- Resolution saturation driver: `scripts/isaaclab_trampoline_resolution_saturation.py`
+- Per-run artifact root: `logs/isaaclab_trampoline_phase1_runs/`
+- Resolution saturation artifact root: `logs/isaaclab_trampoline_resolution_saturation_runs/`
+- Each run creates a timestamped directory whose name encodes `label / sim_time / sim_dt / ball_height / ball_mass / sim_resolution / thickness / trampoline_mass / youngs_modulus / elasticity_damping / damping_scale`.
+- Per-run directory contains:
+  - `phase1_summary.csv`: single-run summary metrics.
+  - `phase1_trajectory.csv`: per-step ball position/velocity, trampoline top-center position/velocity, compression, and stable/apex flags.
+  - `phase1_vertical_state.png`: 2×1 plot of ball and trampoline center vertical position/velocity.
+  - `phase1_compression.png`: trampoline center compression over time.
+  - `phase1_video.mp4`: video.
+- CSV paths are generated automatically from the run directory; do not specify via `--output`.
+- Resolution saturation summary outputs: `resolution_saturation_runs.csv` and `resolution_saturation_group_summary.csv`.
+
+Example commands:
 
 ```bash
 python scripts/isaaclab_trampoline_phase1_condition.py --headless --label nominal
@@ -158,11 +180,11 @@ python scripts/isaaclab_trampoline_phase1_sweep.py --headless
 python scripts/isaaclab_trampoline_resolution_saturation.py --headless --no-video
 ```
 
-## 后续测试
+## Next steps
 
-- **中心 vs 偏心落点**
-   - 中心落点和轻微偏心落点分开测
-   - 看 yaw/roll/pitch 敏感性
+- **Center vs. off-center drop**
+   - Test center and slightly off-center drop points separately
+   - Measure yaw/roll/pitch sensitivity
 
-- **机器人静载、落下**
-   - 机器人站立不动，逐步抬升/下压
+- **Robot static load and drop**
+   - Robot standing still, gradually raised/lowered
