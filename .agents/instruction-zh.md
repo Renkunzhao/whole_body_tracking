@@ -178,6 +178,10 @@ python scripts/isaaclab_trampoline_phase1_sweep.py --headless
 python scripts/isaaclab_trampoline_resolution_saturation.py --headless --no-video
 ```
 
+### Phase 1 结论
+- 分辨率15, thick 0.1
+- 后续根据需要调整
+
 ## 后续测试
 
 - **中心 vs 偏心落点**

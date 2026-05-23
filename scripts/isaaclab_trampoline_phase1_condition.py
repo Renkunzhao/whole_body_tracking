@@ -26,9 +26,11 @@ FALLTHROUGH_BALL_Z = -2.0
 DEFAULT_THICKNESS = 0.1
 DEFAULT_TRAMPOLINE_MASS = 10.0
 DEFAULT_SIM_RESOLUTION = 15
-DEFAULT_YOUNGS = 8.0e4
-DEFAULT_ELASTICITY_DAMPING = 0.02
-DEFAULT_DAMPING_SCALE = 0.1
+DEFAULT_YOUNGS = 8.0e6
+DEFAULT_DYNAMIC_FRICTION = 0.8
+DEFAULT_ELASTICITY_DAMPING = 0.01
+DEFAULT_DAMPING_SCALE = 1.0
+DEFAULT_POISSONS_RATIO = 0.35
 DEFAULT_VIDEO_WIDTH = 1280
 DEFAULT_VIDEO_HEIGHT = 720
 DEFAULT_VIDEO_FPS = 30
@@ -49,8 +51,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--trampoline_mass", type=float, default=DEFAULT_TRAMPOLINE_MASS, help="Trampoline mass in kilograms.")
     parser.add_argument("--sim_resolution", type=int, default=DEFAULT_SIM_RESOLUTION, help="Hexahedral resolution used at spawn time.")
     parser.add_argument("--youngs_modulus", type=float, default=DEFAULT_YOUNGS, help="Young's modulus used for the trampoline material.")
+    parser.add_argument("--dynamic_friction", type=float, default=DEFAULT_DYNAMIC_FRICTION, help="Dynamic friction used for the trampoline material.")
     parser.add_argument("--elasticity_damping", type=float, default=DEFAULT_ELASTICITY_DAMPING, help="Elasticity damping used for the trampoline material.")
     parser.add_argument("--damping_scale", type=float, default=DEFAULT_DAMPING_SCALE, help="Damping scale used for the trampoline material.")
+    parser.add_argument("--poissons_ratio", type=float, default=DEFAULT_POISSONS_RATIO, help="Poisson's ratio used for the trampoline material.")
     parser.add_argument("--stable_vz_threshold", type=float, default=DEFAULT_STABLE_VZ_THRESHOLD, help="Vertical speed threshold for stable-time detection.")
     parser.add_argument("--stable_window_s", type=float, default=DEFAULT_STABLE_WINDOW_S, help="Required consecutive low-speed duration for stable-time detection.")
     parser.add_argument("--apex_vz_hysteresis", type=float, default=DEFAULT_APEX_VZ_HYSTERESIS, help="Velocity hysteresis used to arm apex detection and suppress jitter.")
@@ -83,7 +87,9 @@ from whole_body_tracking.utils.trampoline_deformable import (  # noqa: E402
     build_trampoline_kinematic_targets,
     make_trampoline_cfg,
     set_trampoline_damping_scales,
+    set_trampoline_dynamic_frictions,
     set_trampoline_elasticity_dampings,
+    set_trampoline_poissons_ratios,
     set_trampoline_youngs_moduli,
 )
 
@@ -137,8 +143,10 @@ def build_run_dir(args: argparse.Namespace) -> Path:
         f"th{format_float_label(args.thickness)}",
         f"tm{format_float_label(args.trampoline_mass)}",
         f"E{format_float_label(args.youngs_modulus)}",
+        f"df{format_float_label(args.dynamic_friction)}",
         f"ed{format_float_label(args.elasticity_damping)}",
         f"ds{format_float_label(args.damping_scale)}",
+        f"nu{format_float_label(args.poissons_ratio)}",
     ]
     return args.artifact_root.expanduser().resolve() / "__".join(parts)
 
@@ -325,8 +333,10 @@ def main() -> None:
         setter(material_view, torch.tensor([value], dtype=torch.float32), env_ids_cpu)
 
     write_material_property(set_trampoline_youngs_moduli, args_cli.youngs_modulus)
+    write_material_property(set_trampoline_dynamic_frictions, args_cli.dynamic_friction)
     write_material_property(set_trampoline_elasticity_dampings, args_cli.elasticity_damping)
     write_material_property(set_trampoline_damping_scales, args_cli.damping_scale)
+    write_material_property(set_trampoline_poissons_ratios, args_cli.poissons_ratio)
 
     targets, pinned_mask, center_node_ids = build_trampoline_kinematic_targets(
         trampoline.data.default_nodal_state_w,
@@ -493,6 +503,20 @@ def main() -> None:
             stable_time_s = float("nan")
             stable_ball_z = float("nan")
             stable_compression = float("nan")
+        if fallthrough:
+            final_state = "fallthrough"
+        elif fell_off_edge:
+            final_state = "fell_off_edge"
+        elif stable:
+            final_state = "stable"
+        elif second_apex_found:
+            final_state = "second_apex"
+        elif first_apex_found:
+            final_state = "first_apex"
+        elif math.isfinite(first_min_ball_z_time_s):
+            final_state = "first_min"
+        else:
+            final_state = "not_stable"
 
         row = {
             "label": args_cli.label,
@@ -504,8 +528,10 @@ def main() -> None:
             "sim_resolution": args_cli.sim_resolution,
             "pinned_node_count": int(pinned_mask[0].sum().item()),
             "youngs_modulus": args_cli.youngs_modulus,
+            "dynamic_friction": args_cli.dynamic_friction,
             "elasticity_damping": args_cli.elasticity_damping,
             "damping_scale": args_cli.damping_scale,
+            "poissons_ratio": args_cli.poissons_ratio,
             "sim_time": args_cli.sim_time,
             "sim_dt": args_cli.sim_dt,
             "wall_time_s": round(wall_time_s, 2),
@@ -513,12 +539,14 @@ def main() -> None:
             "static_sag_m": round(static_sag_m, 6),
             "fallthrough": int(fallthrough),
             "fell_off_edge": int(fell_off_edge),
+            "final_state": final_state,
             "min_ball_z_x_m": min_ball_z_xy[0],
             "min_ball_z_y_m": min_ball_z_xy[1],
             "first_min_ball_z_m": finite_or_nan(first_min_ball_z_m),
             "first_min_ball_z_time_s": finite_or_nan(first_min_ball_z_time_s),
             "first_apex_height_m": finite_or_nan(first_apex_height_m),
             "first_apex_time_s": finite_or_nan(first_apex_time_s),
+            "rebound_height_m": finite_or_nan(first_apex_height_m),
             "second_apex_height_m": finite_or_nan(second_apex_height_m),
             "second_apex_time_s": finite_or_nan(second_apex_time_s),
             "damping_ratio": finite_or_nan(second_apex_height_m / first_apex_height_m if first_apex_found and second_apex_found and first_apex_height_m > 0.0 else float("nan")),
