@@ -8,6 +8,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 from datetime import datetime
 from itertools import product
 from pathlib import Path
@@ -22,8 +23,6 @@ BALL_MASS = 4.02
 DEFAULT_BALL_HEIGHT = 1.0
 DEFAULT_SIM_DT = 0.002
 DEFAULT_SIM_TIME = 10.0
-CONTACT_START_BOTTOM_Z = 0.015
-CONTACT_END_BOTTOM_Z = 0.035
 DEFAULT_STABLE_VZ_THRESHOLD = 0.05
 DEFAULT_STABLE_WINDOW_S = 0.2
 DEFAULT_APEX_VZ_HYSTERESIS = 0.05
@@ -31,9 +30,11 @@ FALLTHROUGH_BALL_Z = -2.0
 DEFAULT_THICKNESS = 0.1
 DEFAULT_TRAMPOLINE_MASS = 10.0
 DEFAULT_SIM_RESOLUTION = 15
-DEFAULT_YOUNGS = 8.0e4
-DEFAULT_ELASTICITY_DAMPING = 0.02
-DEFAULT_DAMPING_SCALE = 0.1
+DEFAULT_YOUNGS = 8.0e6
+DEFAULT_DYNAMIC_FRICTION = 0.8
+DEFAULT_ELASTICITY_DAMPING = 0.01
+DEFAULT_DAMPING_SCALE = 1.0
+DEFAULT_POISSONS_RATIO = 0.35
 DEFAULT_VIDEO_WIDTH = 1280
 DEFAULT_VIDEO_HEIGHT = 720
 DEFAULT_VIDEO_FPS = 30
@@ -79,8 +80,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--trampoline_mass", type=float, default=DEFAULT_TRAMPOLINE_MASS, help="Trampoline mass in kilograms.")
     parser.add_argument("--sim_resolution", type=int, default=DEFAULT_SIM_RESOLUTION, help="Hexahedral resolution used at spawn time.")
     parser.add_argument("--youngs_modulus", type=float, default=DEFAULT_YOUNGS, help="Young's modulus used for the trampoline material.")
+    parser.add_argument("--dynamic_friction", type=float, default=DEFAULT_DYNAMIC_FRICTION, help="Dynamic friction used for the trampoline material.")
     parser.add_argument("--elasticity_damping", type=float, default=DEFAULT_ELASTICITY_DAMPING, help="Elasticity damping used for the trampoline material.")
     parser.add_argument("--damping_scale", type=float, default=DEFAULT_DAMPING_SCALE, help="Damping scale used for the trampoline material.")
+    parser.add_argument("--poissons_ratio", type=float, default=DEFAULT_POISSONS_RATIO, help="Poisson's ratio used for the trampoline material.")
     parser.add_argument("--stable_vz_threshold", type=float, default=DEFAULT_STABLE_VZ_THRESHOLD, help="Vertical speed threshold for stable-time detection.")
     parser.add_argument("--stable_window_s", type=float, default=DEFAULT_STABLE_WINDOW_S, help="Required consecutive low-speed duration for stable-time detection.")
     parser.add_argument("--apex_vz_hysteresis", type=float, default=DEFAULT_APEX_VZ_HYSTERESIS, help="Velocity hysteresis used to arm apex detection and suppress jitter.")
@@ -320,10 +323,13 @@ from isaaclab.sensors.camera import Camera, CameraCfg  # noqa: E402
 from isaaclab.utils import configclass  # noqa: E402
 
 from whole_body_tracking.utils.trampoline_deformable import (  # noqa: E402
+    TRAMPOLINE_RADIUS,
     build_trampoline_kinematic_targets,
     make_trampoline_cfg,
     set_trampoline_damping_scales,
+    set_trampoline_dynamic_frictions,
     set_trampoline_elasticity_dampings,
+    set_trampoline_poissons_ratios,
     set_trampoline_youngs_moduli,
 )
 
@@ -365,8 +371,10 @@ def build_run_dir(args: argparse.Namespace) -> Path:
         f"th{format_float_label(args.thickness)}",
         f"tm{format_float_label(args.trampoline_mass)}",
         f"E{format_float_label(args.youngs_modulus)}",
+        f"df{format_float_label(args.dynamic_friction)}",
         f"ed{format_float_label(args.elasticity_damping)}",
         f"ds{format_float_label(args.damping_scale)}",
+        f"nu{format_float_label(args.poissons_ratio)}",
     ]
     return args.artifact_root.expanduser().resolve() / "__".join(parts)
 
@@ -490,7 +498,6 @@ def plot_timeseries(rows: list[dict[str, Any]], output_dir: Path) -> list[Path]:
     ball_vz = np.asarray([row["ball_vz_mps"] for row in rows], dtype=float)
     center_z = np.asarray([row["trampoline_center_z_m"] for row in rows], dtype=float)
     center_vz = np.asarray([row["trampoline_center_vz_mps"] for row in rows], dtype=float)
-    bottom_z = np.asarray([row["ball_bottom_z_m"] for row in rows], dtype=float)
     compression = np.asarray([row["compression_m"] for row in rows], dtype=float)
 
     state_path = output_dir / VERTICAL_STATE_PLOT_FILENAME
@@ -499,9 +506,7 @@ def plot_timeseries(rows: list[dict[str, Any]], output_dir: Path) -> list[Path]:
     fig, ax = plt.subplots(2, 1, figsize=(10, 7), sharex=True)
     ax[0].plot(times, ball_z, label="ball z")
     ax[0].plot(times, center_z, label="trampoline center z")
-    ax[0].plot(times, bottom_z, label="ball bottom z", linestyle="--", alpha=0.7)
-    ax[0].axhline(CONTACT_START_BOTTOM_Z, color="tab:red", linestyle=":", linewidth=1, label="contact start threshold")
-    ax[0].axhline(CONTACT_END_BOTTOM_Z, color="tab:green", linestyle=":", linewidth=1, label="contact end threshold")
+    ax[0].axhline(0.0, color="tab:gray", linestyle=":", linewidth=1, label="z=0")
     ax[0].set_ylabel("position [m]")
     ax[0].legend(loc="best")
     ax[0].grid(True, alpha=0.3)
@@ -556,8 +561,10 @@ def main() -> None:
         setter(material_view, torch.tensor([value], dtype=torch.float32), env_ids_cpu)
 
     write_material_property(set_trampoline_youngs_moduli, args_cli.youngs_modulus)
+    write_material_property(set_trampoline_dynamic_frictions, args_cli.dynamic_friction)
     write_material_property(set_trampoline_elasticity_dampings, args_cli.elasticity_damping)
     write_material_property(set_trampoline_damping_scales, args_cli.damping_scale)
+    write_material_property(set_trampoline_poissons_ratios, args_cli.poissons_ratio)
 
     targets, pinned_mask, center_node_ids = build_trampoline_kinematic_targets(
         trampoline.data.default_nodal_state_w,
@@ -571,20 +578,31 @@ def main() -> None:
         camera.update(dt=args_cli.sim_dt)
 
     center_z0 = float(trampoline.data.nodal_pos_w[0, center_node_ids[0], 2])
+    static_sag_m = -center_z0  # center_z0 should be ~0; negative means sagged below spawn height
     min_center_z = center_z0
     min_ball_z = float(ball.data.root_pos_w[0, 2])
-    contact_started = False
-    released = False
-    contact_start_s = float("nan")
-    contact_end_s = float("nan")
-    impact_vz = float("nan")
-    release_vz = float("nan")
-    max_rebound = -float("inf")
+    min_ball_z_xy = (float(ball.data.root_pos_w[0, 0]), float(ball.data.root_pos_w[0, 1]))
+
+    # first compression lowest point (vz crosses 0 from negative to positive)
+    first_min_ball_z_m = float("nan")
+    first_min_ball_z_time_s = float("nan")
+    first_min_armed = False  # armed once ball starts descending
+
+    # first apex (vz crosses 0 from positive to negative, after first_min)
     first_apex_found = False
-    apex_armed = False
-    previous_ball_vz = float("nan")
+    first_apex_armed = False
     first_apex_time_s = float("nan")
     first_apex_height_m = float("nan")
+
+    # second apex for damping ratio
+    second_apex_found = False
+    second_apex_armed = False
+    second_apex_time_s = float("nan")
+    second_apex_height_m = float("nan")
+
+    previous_ball_vz = float("nan")
+
+    # stable detection
     stable_step_count = 0
     stable_window_steps = max(1, int(round(args_cli.stable_window_s / args_cli.sim_dt)))
     stable = False
@@ -601,6 +619,7 @@ def main() -> None:
         video_writer = imageio.get_writer(video_path, fps=args_cli.video_fps, macro_block_size=1)
 
     completed_successfully = False
+    loop_start_time = time.perf_counter()
     try:
         for step in range(int(args_cli.sim_time / args_cli.sim_dt)):
             trampoline.write_nodal_kinematic_target_to_sim(targets)
@@ -615,7 +634,6 @@ def main() -> None:
             ball_vel = ball.data.root_lin_vel_w[0]
             ball_z = float(ball_pos[2])
             ball_vz = float(ball_vel[2])
-            bottom_z = ball_z - BALL_RADIUS
             center_pos = trampoline.data.nodal_pos_w[0, center_node_ids[0], :3]
             center_vel_tensor = getattr(trampoline.data, "nodal_vel_w", None)
             if center_vel_tensor is not None:
@@ -628,7 +646,9 @@ def main() -> None:
             compression = float(center_z0 - center_z)
 
             min_center_z = min(min_center_z, center_z)
-            min_ball_z = min(min_ball_z, ball_z)
+            if ball_z < min_ball_z:
+                min_ball_z = ball_z
+                min_ball_z_xy = (float(ball_pos[0]), float(ball_pos[1]))
 
             if not stable:
                 stable_step_count = stable_step_count + 1 if abs(ball_vz) <= args_cli.stable_vz_threshold else 0
@@ -638,28 +658,36 @@ def main() -> None:
                     stable_ball_z = ball_z
                     stable_compression = compression
 
-            if contact_started and not first_apex_found:
-                if ball_vz > args_cli.apex_vz_hysteresis:
-                    apex_armed = True
-                if apex_armed and math.isfinite(previous_ball_vz) and previous_ball_vz > 0.0 and ball_vz <= 0.0:
-                    first_apex_found = True
-                    first_apex_time_s = t
-                    first_apex_height_m = ball_z
-                    apex_armed = False
+            if math.isfinite(previous_ball_vz):
+                # arm first_min once ball starts descending
+                if not first_min_armed and ball_vz < 0.0:
+                    first_min_armed = True
+
+                # first compression lowest point: vz crosses 0 negative→positive
+                if first_min_armed and math.isnan(first_min_ball_z_time_s) and previous_ball_vz < 0.0 and ball_vz >= 0.0:
+                    first_min_ball_z_m = ball_z
+                    first_min_ball_z_time_s = t
+
+                # first apex: vz crosses 0 positive→negative, after first_min
+                if math.isfinite(first_min_ball_z_time_s) and not first_apex_found:
+                    if ball_vz > args_cli.apex_vz_hysteresis:
+                        first_apex_armed = True
+                    if first_apex_armed and previous_ball_vz > 0.0 and ball_vz <= 0.0:
+                        first_apex_found = True
+                        first_apex_time_s = t
+                        first_apex_height_m = ball_z
+
+                # second apex: after first_apex, wait for ball to descend then rise again
+                # second_apex_armed=True means ball has descended and is now rising toward second apex
+                if first_apex_found and not second_apex_found:
+                    if not second_apex_armed and previous_ball_vz <= 0.0 and ball_vz > 0.0 and t > first_apex_time_s:
+                        second_apex_armed = True  # rising after second descent
+                    if second_apex_armed and previous_ball_vz > 0.0 and ball_vz <= 0.0:
+                        second_apex_found = True
+                        second_apex_time_s = t
+                        second_apex_height_m = ball_z
+
             previous_ball_vz = ball_vz
-
-            if not contact_started and bottom_z <= CONTACT_START_BOTTOM_Z:
-                contact_started = True
-                contact_start_s = t
-                impact_vz = ball_vz
-
-            if contact_started and not released and bottom_z >= CONTACT_END_BOTTOM_Z and ball_vz > 0.0:
-                released = True
-                contact_end_s = t
-                release_vz = ball_vz
-
-            if released:
-                max_rebound = max(max_rebound, ball_z)
 
             rows.append(
                 {
@@ -671,19 +699,15 @@ def main() -> None:
                     "ball_vx_mps": float(ball_vel[0]),
                     "ball_vy_mps": float(ball_vel[1]),
                     "ball_vz_mps": ball_vz,
-                    "ball_bottom_z_m": bottom_z,
                     "trampoline_center_x_m": float(center_pos[0]),
                     "trampoline_center_y_m": float(center_pos[1]),
                     "trampoline_center_z_m": center_z,
-                    "trampoline_center_vx_mps": float(center_vel[0]) if center_vel_tensor is not None else float("nan"),
-                    "trampoline_center_vy_mps": float(center_vel[1]) if center_vel_tensor is not None else float("nan"),
                     "trampoline_center_vz_mps": center_vz,
                     "compression_m": compression,
                     "stable": int(stable),
-                    "apex_armed": int(apex_armed),
+                    "first_min_found": int(math.isfinite(first_min_ball_z_time_s)),
                     "first_apex_found": int(first_apex_found),
-                    "contact_started": int(contact_started),
-                    "released": int(released),
+                    "second_apex_found": int(second_apex_found),
                 }
             )
 
@@ -691,14 +715,36 @@ def main() -> None:
                 frame = _as_numpy_rgb(camera.data.output["rgb"])  # type: ignore[index]
                 video_writer.append_data(frame)
 
+        wall_time_s = time.perf_counter() - loop_start_time
         write_timeseries_csv(timeseries_path, rows)
 
-        fallthrough = min_ball_z < FALLTHROUGH_BALL_Z
-        if fallthrough:
+        dropped_below = min_ball_z < FALLTHROUGH_BALL_Z
+        if dropped_below:
+            min_ball_z_r = math.sqrt(min_ball_z_xy[0] ** 2 + min_ball_z_xy[1] ** 2)
+            fell_off_edge = min_ball_z_r >= TRAMPOLINE_RADIUS
+            fallthrough = dropped_below and not fell_off_edge
+        else:
+            fell_off_edge = False
+            fallthrough = False
+        if fallthrough or fell_off_edge:
             stable = False
             stable_time_s = float("nan")
             stable_ball_z = float("nan")
             stable_compression = float("nan")
+        if fallthrough:
+            final_state = "fallthrough"
+        elif fell_off_edge:
+            final_state = "fell_off_edge"
+        elif stable:
+            final_state = "stable"
+        elif second_apex_found:
+            final_state = "second_apex"
+        elif first_apex_found:
+            final_state = "first_apex"
+        elif math.isfinite(first_min_ball_z_time_s):
+            final_state = "first_min"
+        else:
+            final_state = "not_stable"
 
         row = {
             "label": args_cli.label,
@@ -710,28 +756,33 @@ def main() -> None:
             "sim_resolution": args_cli.sim_resolution,
             "pinned_node_count": int(pinned_mask[0].sum().item()),
             "youngs_modulus": args_cli.youngs_modulus,
+            "dynamic_friction": args_cli.dynamic_friction,
             "elasticity_damping": args_cli.elasticity_damping,
             "damping_scale": args_cli.damping_scale,
+            "poissons_ratio": args_cli.poissons_ratio,
             "sim_time": args_cli.sim_time,
             "sim_dt": args_cli.sim_dt,
+            "wall_time_s": round(wall_time_s, 2),
             "video": int(args_cli.video),
+            "static_sag_m": round(static_sag_m, 6),
+            "fallthrough": int(fallthrough),
+            "fell_off_edge": int(fell_off_edge),
+            "final_state": final_state,
+            "min_ball_z_x_m": min_ball_z_xy[0],
+            "min_ball_z_y_m": min_ball_z_xy[1],
+            "first_min_ball_z_m": finite_or_nan(first_min_ball_z_m),
+            "first_min_ball_z_time_s": finite_or_nan(first_min_ball_z_time_s),
+            "first_apex_height_m": finite_or_nan(first_apex_height_m),
+            "first_apex_time_s": finite_or_nan(first_apex_time_s),
+            "rebound_height_m": finite_or_nan(first_apex_height_m),
+            "second_apex_height_m": finite_or_nan(second_apex_height_m),
+            "second_apex_time_s": finite_or_nan(second_apex_time_s),
+            "damping_ratio": finite_or_nan(second_apex_height_m / first_apex_height_m if first_apex_found and second_apex_found and first_apex_height_m > 0.0 else float("nan")),
+            "max_compression_m": float(center_z0 - min_center_z),
             "stable": int(stable),
             "stable_time_s": finite_or_nan(stable_time_s),
             "stable_ball_z_m": finite_or_nan(stable_ball_z),
             "stable_compression_m": finite_or_nan(stable_compression),
-            "fallthrough": int(fallthrough),
-            "first_apex_found": int(first_apex_found),
-            "first_apex_time_s": finite_or_nan(first_apex_time_s),
-            "first_apex_height_m": finite_or_nan(first_apex_height_m),
-            "contact_started": int(contact_started),
-            "released": int(released),
-            "contact_start_s": finite_or_nan(contact_start_s),
-            "contact_duration_s": finite_or_nan(contact_end_s - contact_start_s if contact_started and released else float("nan")),
-            "impact_vz_mps": finite_or_nan(impact_vz),
-            "release_vz_mps": finite_or_nan(release_vz),
-            "max_compression_m": float(center_z0 - min_center_z),
-            "min_ball_z_m": float(min_ball_z),
-            "rebound_height_m": finite_or_nan(first_apex_height_m),
         }
 
         write_summary_row(summary_path, row)

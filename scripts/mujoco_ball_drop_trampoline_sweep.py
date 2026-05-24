@@ -24,6 +24,7 @@ VERTICAL_STATE_PLOT_FILENAME = "ball_drop_vertical_state.png"
 COMPRESSION_PLOT_FILENAME = "ball_drop_compression.png"
 SWEEP_SUMMARY_FILENAME = "ball_drop_sweep_summary.csv"
 BALL_RADIUS = 0.022
+DEFAULT_BALL_MASS = 4.02
 DEFAULT_BALL_HEIGHT = 1.0
 DEFAULT_SIM_TIME = 4.0
 CONTACT_FORCE_THRESHOLD = 1.0e-3
@@ -31,6 +32,7 @@ DEFAULT_STABLE_VZ_THRESHOLD = 0.05
 DEFAULT_STABLE_WINDOW_S = 0.2
 DEFAULT_APEX_VZ_HYSTERESIS = 0.05
 FALLTHROUGH_BALL_Z = -2.0
+DEFAULT_USABLE_RADIUS = 1.5
 DEFAULT_TRAMPOLINE_MASS = 10.0
 DEFAULT_TRAMPOLINE_RADIUS = 0.03
 DEFAULT_TRAMPOLINE_SPACING = 1.5
@@ -43,6 +45,7 @@ DEFAULT_VIDEO_FPS = 60
 
 CONDITION_FIELDS: dict[str, type] = {
     "sim_time": float,
+    "ball_mass": float,
     "ball_height": float,
     "force_threshold": float,
     "stable_vz_threshold": float,
@@ -63,6 +66,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output", type=Path, default=None, help="Summary CSV path. If omitted, a run directory is auto-created under logs/mujoco_ball_drop_runs/.")
     parser.add_argument("--label", type=str, default="nominal", help="Condition label used when no sweep is configured.")
     parser.add_argument("--sim_time", type=float, default=DEFAULT_SIM_TIME, help="Simulation duration in seconds.")
+    parser.add_argument("--ball_mass", type=float, default=DEFAULT_BALL_MASS, help="Ball mass in kilograms.")
     parser.add_argument("--ball_height", type=float, default=DEFAULT_BALL_HEIGHT, help="Initial ball center height.")
     parser.add_argument("--force_threshold", type=float, default=CONTACT_FORCE_THRESHOLD, help="Touch force threshold for contact state.")
     parser.add_argument("--stable_vz_threshold", type=float, default=DEFAULT_STABLE_VZ_THRESHOLD, help="Vertical speed threshold for stable-time detection.")
@@ -108,6 +112,7 @@ def build_output_stem(label: str, conditions: list[tuple[str, dict[str, Any]]]) 
     parts = [
         sanitize_token(condition_label),
         f"t{format_float_label(condition['sim_time'])}",
+        f"bm{format_float_label(condition['ball_mass'])}",
         f"h{format_float_label(condition['ball_height'])}",
         f"m{format_float_label(condition['mass'])}",
         f"r{format_float_label(condition['radius'])}",
@@ -267,13 +272,57 @@ def sensor_slice(model: Any, name: str) -> slice:
     return slice(start, start + dim)
 
 
-def body_mass(model: Any, name: str) -> float:
-    return float(np.asarray(model.body(name).mass).reshape(-1)[0])
+def set_ball_mass(ball_body: ET.Element, ball_mass: float) -> None:
+    inertial = ball_body.find("inertial")
+    if inertial is not None:
+        inertial.set("mass", f"{ball_mass:g}")
+        return
+
+    geoms = ball_body.findall(".//geom")
+    if not geoms:
+        raise RuntimeError("Could not find a geom or inertial element for the MuJoCo ball mass.")
+    geoms[0].set("mass", f"{ball_mass:g}")
+    for geom in geoms[1:]:
+        geom.attrib.pop("mass", None)
+
+
+def top_center_flex_vertex_id(data: Any) -> int:
+    xy = data.flexvert_xpos[:, :2]
+    center_xy = 0.5 * (xy.min(axis=0) + xy.max(axis=0))
+    radial_distance = np.linalg.norm(xy - center_xy, axis=1)
+    min_radial_distance = float(radial_distance.min())
+    center_candidates = np.flatnonzero(radial_distance <= min_radial_distance + 1.0e-9)
+    return int(center_candidates[np.argmax(data.flexvert_xpos[center_candidates, 2])])
+
+
+def classify_final_state(
+    *,
+    fallthrough: bool,
+    fell_off_edge: bool,
+    stable: bool,
+    second_apex_found: bool,
+    first_apex_found: bool,
+    first_min_found: bool,
+) -> str:
+    if fallthrough:
+        return "fallthrough"
+    if fell_off_edge:
+        return "fell_off_edge"
+    if stable:
+        return "stable"
+    if second_apex_found:
+        return "second_apex"
+    if first_apex_found:
+        return "first_apex"
+    if first_min_found:
+        return "first_min"
+    return "not_stable"
 
 
 def build_model(
     asset_dir: Path,
     *,
+    ball_mass: float,
     ball_height: float,
     ball_x: float = DEFAULT_BALL_X,
     mass: float = DEFAULT_TRAMPOLINE_MASS,
@@ -291,6 +340,7 @@ def build_model(
     if ball_body is None:
         raise RuntimeError("Could not find body 'foot' in ball.xml.")
     ball_body.set("pos", f"{ball_x:g} 0 {ball_height:g}")
+    set_ball_mass(ball_body, ball_mass)
 
     flex = trampoline.find("worldbody").find("flexcomp[@name='trampoline']")
     if flex is None:
@@ -432,6 +482,7 @@ def run_condition(args: argparse.Namespace, label: str, condition: dict[str, Any
 
     model = build_model(
         args.asset_dir,
+        ball_mass=condition["ball_mass"],
         ball_height=condition["ball_height"],
         ball_x=condition["ball_x"],
         mass=condition["mass"],
@@ -448,9 +499,10 @@ def run_condition(args: argparse.Namespace, label: str, condition: dict[str, Any
     touch_slice = sensor_slice(model, "foot_touch")
     pos_slice = sensor_slice(model, "foot_pos")
     vel_slice = sensor_slice(model, "foot_linvel")
-    center_id = int(np.argmin(np.linalg.norm(data.flexvert_xpos[:, :2], axis=1)))
+    center_id = top_center_flex_vertex_id(data)
     center_z0 = float(data.flexvert_xpos[center_id, 2])
     previous_center_pos = data.flexvert_xpos[center_id, :3].copy()
+    static_sag_m = -center_z0
 
     contact_started = False
     released = False
@@ -460,20 +512,28 @@ def run_condition(args: argparse.Namespace, label: str, condition: dict[str, Any
     release_vz = float("nan")
     min_center_z = center_z0
     min_ball_z = float(data.sensordata[pos_slice][2])
-    peak_force = 0.0
-    impulse = 0.0
-    previous_contact = False
+    min_ball_z_xy = (float(data.sensordata[pos_slice][0]), float(data.sensordata[pos_slice][1]))
+    first_min_ball_z_m = float("nan")
+    first_min_ball_z_time_s = float("nan")
+    first_min_armed = False
     first_apex_found = False
-    apex_armed = False
-    previous_ball_vz = float("nan")
+    first_apex_armed = False
     first_apex_time_s = float("nan")
     first_apex_height_m = float("nan")
+    second_apex_found = False
+    second_apex_armed = False
+    second_apex_time_s = float("nan")
+    second_apex_height_m = float("nan")
+    previous_ball_vz = float("nan")
     stable_step_count = 0
     stable_window_steps = max(1, int(round(condition["stable_window_s"] / model.opt.timestep)))
     stable = False
     stable_time_s = float("nan")
     stable_ball_z = float("nan")
     stable_compression = float("nan")
+    peak_force = 0.0
+    impulse = 0.0
+    previous_contact = False
     rows: list[dict[str, Any]] = []
 
     video_writer, video_path_text = make_video_writer(args, run_dir)
@@ -491,11 +551,17 @@ def run_condition(args: argparse.Namespace, label: str, condition: dict[str, Any
             force = float(data.sensordata[touch_slice][0])
             ball_pos = data.sensordata[pos_slice].copy()
             ball_vel = data.sensordata[vel_slice].copy()
+            ball_x = float(ball_pos[0])
+            ball_y = float(ball_pos[1])
             ball_z = float(ball_pos[2])
             ball_vz = float(ball_vel[2])
             ball_bottom_z = ball_z - BALL_RADIUS
             center_pos = data.flexvert_xpos[center_id, :3].copy()
-            center_vel = (center_pos - previous_center_pos) / model.opt.timestep
+            flexvert_xvel = getattr(data, "flexvert_xvel", None)
+            if flexvert_xvel is not None:
+                center_vel = np.asarray(flexvert_xvel[center_id, :3], dtype=float)
+            else:
+                center_vel = (center_pos - previous_center_pos) / model.opt.timestep
             previous_center_pos = center_pos
             center_z = float(center_pos[2])
             center_vz = float(center_vel[2])
@@ -503,7 +569,9 @@ def run_condition(args: argparse.Namespace, label: str, condition: dict[str, Any
             in_contact = force > condition["force_threshold"]
 
             min_center_z = min(min_center_z, center_z)
-            min_ball_z = min(min_ball_z, ball_z)
+            if ball_z < min_ball_z:
+                min_ball_z = ball_z
+                min_ball_z_xy = (ball_x, ball_y)
             peak_force = max(peak_force, force)
             impulse += max(force, 0.0) * model.opt.timestep
 
@@ -515,21 +583,32 @@ def run_condition(args: argparse.Namespace, label: str, condition: dict[str, Any
                     stable_ball_z = ball_z
                     stable_compression = compression
 
-            if contact_started and not first_apex_found:
-                if ball_vz > condition["apex_vz_hysteresis"]:
-                    apex_armed = True
-                if apex_armed and math.isfinite(previous_ball_vz) and previous_ball_vz > 0.0 and ball_vz <= 0.0:
-                    first_apex_found = True
-                    first_apex_time_s = float(data.time)
-                    first_apex_height_m = ball_z
-                    apex_armed = False
+            if math.isfinite(previous_ball_vz):
+                if not first_min_armed and ball_vz < 0.0:
+                    first_min_armed = True
+                if first_min_armed and math.isnan(first_min_ball_z_time_s) and previous_ball_vz < 0.0 and ball_vz >= 0.0:
+                    first_min_ball_z_m = ball_z
+                    first_min_ball_z_time_s = float(data.time)
+                if math.isfinite(first_min_ball_z_time_s) and not first_apex_found:
+                    if ball_vz > condition["apex_vz_hysteresis"]:
+                        first_apex_armed = True
+                    if first_apex_armed and previous_ball_vz > 0.0 and ball_vz <= 0.0:
+                        first_apex_found = True
+                        first_apex_time_s = float(data.time)
+                        first_apex_height_m = ball_z
+                if first_apex_found and not second_apex_found:
+                    if not second_apex_armed and previous_ball_vz <= 0.0 and ball_vz > 0.0 and data.time > first_apex_time_s:
+                        second_apex_armed = True
+                    if second_apex_armed and previous_ball_vz > 0.0 and ball_vz <= 0.0:
+                        second_apex_found = True
+                        second_apex_time_s = float(data.time)
+                        second_apex_height_m = ball_z
             previous_ball_vz = ball_vz
 
             if in_contact and not previous_contact and not contact_started:
                 contact_started = True
                 contact_start_s = float(data.time)
                 impact_vz = ball_vz
-
             if contact_started and previous_contact and not in_contact and not released:
                 released = True
                 contact_end_s = float(data.time)
@@ -539,8 +618,8 @@ def run_condition(args: argparse.Namespace, label: str, condition: dict[str, Any
                 {
                     "step": step,
                     "time_s": float(data.time),
-                    "ball_x_m": float(ball_pos[0]),
-                    "ball_y_m": float(ball_pos[1]),
+                    "ball_x_m": ball_x,
+                    "ball_y_m": ball_y,
                     "ball_z_m": ball_z,
                     "ball_vx_mps": float(ball_vel[0]),
                     "ball_vy_mps": float(ball_vel[1]),
@@ -555,8 +634,9 @@ def run_condition(args: argparse.Namespace, label: str, condition: dict[str, Any
                     "compression_m": compression,
                     "contact_force_N": force,
                     "stable": int(stable),
-                    "apex_armed": int(apex_armed),
+                    "first_min_found": int(math.isfinite(first_min_ball_z_time_s)),
                     "first_apex_found": int(first_apex_found),
+                    "second_apex_found": int(second_apex_found),
                     "contact_started": int(contact_started),
                     "released": int(released),
                 }
@@ -577,44 +657,71 @@ def run_condition(args: argparse.Namespace, label: str, condition: dict[str, Any
     write_csv(trajectory_path, rows)
     plot_paths = plot_timeseries(rows, run_dir)
 
-    fallthrough = min_ball_z < FALLTHROUGH_BALL_Z
-    if fallthrough:
+    dropped_below = min_ball_z < FALLTHROUGH_BALL_Z
+    min_ball_z_r = math.hypot(min_ball_z_xy[0], min_ball_z_xy[1])
+    usable_radius = condition.get("spacing", DEFAULT_USABLE_RADIUS)
+    fell_off_edge = bool(dropped_below and min_ball_z_r >= usable_radius)
+    fallthrough = bool(dropped_below and not fell_off_edge)
+    if fallthrough or fell_off_edge:
         stable = False
         stable_time_s = float("nan")
         stable_ball_z = float("nan")
         stable_compression = float("nan")
 
+    damping_ratio = (
+        second_apex_height_m / first_apex_height_m
+        if first_apex_found and second_apex_found and first_apex_height_m > 0.0
+        else float("nan")
+    )
     row = {
         "label": label,
         "run_dir": str(run_dir),
-        "ball_mass": body_mass(model, "foot"),
+        "ball_mass": condition["ball_mass"],
         "ball_height": condition["ball_height"],
         "trampoline_mass": condition["mass"],
         "trampoline_radius": condition["radius"],
         "trampoline_spacing": condition["spacing"],
+        "usable_radius_m": usable_radius,
         "edge_solref": condition["solref"],
         "edge_solimp": condition["solimp"],
         "ball_x_m": condition["ball_x"],
+        "trajectory_path": str(trajectory_path),
         "sim_time": condition["sim_time"],
         "sim_dt": float(model.opt.timestep),
         "video": int(args.video),
+        "static_sag_m": finite_or_nan(static_sag_m),
+        "fallthrough": int(fallthrough),
+        "fell_off_edge": int(fell_off_edge),
+        "final_state": classify_final_state(
+            fallthrough=fallthrough,
+            fell_off_edge=fell_off_edge,
+            stable=stable,
+            second_apex_found=second_apex_found,
+            first_apex_found=first_apex_found,
+            first_min_found=math.isfinite(first_min_ball_z_time_s),
+        ),
+        "min_ball_z_m": min_ball_z,
+        "min_ball_z_x_m": min_ball_z_xy[0],
+        "min_ball_z_y_m": min_ball_z_xy[1],
+        "first_min_ball_z_m": finite_or_nan(first_min_ball_z_m),
+        "first_min_ball_z_time_s": finite_or_nan(first_min_ball_z_time_s),
+        "first_apex_height_m": finite_or_nan(first_apex_height_m),
+        "first_apex_time_s": finite_or_nan(first_apex_time_s),
+        "rebound_height_m": finite_or_nan(first_apex_height_m),
+        "second_apex_height_m": finite_or_nan(second_apex_height_m),
+        "second_apex_time_s": finite_or_nan(second_apex_time_s),
+        "damping_ratio": finite_or_nan(damping_ratio),
+        "max_compression_m": float(center_z0 - min_center_z),
         "stable": int(stable),
         "stable_time_s": finite_or_nan(stable_time_s),
         "stable_ball_z_m": finite_or_nan(stable_ball_z),
         "stable_compression_m": finite_or_nan(stable_compression),
-        "fallthrough": int(fallthrough),
-        "first_apex_found": int(first_apex_found),
-        "first_apex_time_s": finite_or_nan(first_apex_time_s),
-        "first_apex_height_m": finite_or_nan(first_apex_height_m),
         "contact_started": int(contact_started),
         "released": int(released),
         "contact_start_s": finite_or_nan(contact_start_s),
         "contact_duration_s": finite_or_nan(contact_end_s - contact_start_s if contact_started and released else float("nan")),
         "impact_vz_mps": finite_or_nan(impact_vz),
         "release_vz_mps": finite_or_nan(release_vz),
-        "max_compression_m": float(center_z0 - min_center_z),
-        "min_ball_z_m": float(min_ball_z),
-        "rebound_height_m": finite_or_nan(first_apex_height_m),
         "peak_force_N": peak_force,
         "impulse_Ns": impulse,
         "video_path": video_path_text,
