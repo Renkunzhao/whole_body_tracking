@@ -20,8 +20,8 @@
 - MuJoCo CSV：`logs/mujoco_ball_drop_trampoline_sweep_2026-05-19.csv`
 - IsaacLab CSV：`logs/isaaclab_ball_drop_trampoline_sweep_2026-05-19.csv`
 - 可复用 MuJoCo sweep 脚本：`scripts/mujoco_ball_drop_trampoline_sweep.py`
-- 可复用 IsaacLab sweep 脚本：`scripts/isaaclab_ball_drop_trampoline_sweep.py`
-- 复现命令：
+- 历史 IsaacLab sweep 脚本：`scripts/isaaclab_ball_drop_trampoline_sweep.py`（2026-05-23 已移除；当前入口见下方修改日志）
+- 当时复现命令：
   - `python scripts/mujoco_ball_drop_trampoline_sweep.py --output logs/mujoco_ball_drop_trampoline_sweep.csv`
   - `python scripts/isaaclab_ball_drop_trampoline_sweep.py --headless --output logs/isaaclab_ball_drop_trampoline_sweep.csv`
 - 共同测试：半径约 `0.022 m`、质量约 `4.02 kg` 的小球，从 `z=1.0 m` 附近落到 trampoline 中心。
@@ -125,9 +125,9 @@ IsaacLab/PhysX 中的 `contact_offset` 相当于在可视/物理 mesh 外包裹�
 
 - 实验次数：IsaacLab Phase 1 单条件脚本至少跑通 2 次已记录条件（`nominal`、`nominal_full`）；后续另有手动 `nominal_video` artifact 需要读取 summary 后补充指标。
 - 仿真器：IsaacLab。
-- `scripts/isaaclab_trampoline_phase1_condition.py`
-- `scripts/isaaclab_trampoline_phase1_sweep.py`
-- 单次运行 artifact 根目录：`logs/isaaclab_trampoline_phase1_runs/`
+- 历史单条件脚本：`scripts/isaaclab_trampoline_phase1_condition.py`（2026-05-23 重命名为 `scripts/isaaclab_trampoline_ball_drop.py`）
+- 历史 driver：`scripts/isaaclab_trampoline_phase1_sweep.py`（2026-05-23 已移除）
+- 当时单次运行 artifact 根目录：`logs/isaaclab_trampoline_phase1_runs/`
 - 单次运行 artifact：`phase1_summary.csv`、`phase1_trajectory.csv`、`phase1_vertical_state.png`、`phase1_compression.png`，以及 `phase1_video.mp4`
 - CSV 路径由运行目录自动生成，不再通过 `--output` 手动指定。
 
@@ -194,4 +194,10 @@ IsaacLab/PhysX 中的 `contact_offset` 相当于在可视/物理 mesh 外包裹�
 - `2026-05-20`：修正 trampoline center node 选择逻辑：从只按 xy 最近改为中心 xy 候选中的最高 z 节点，避免厚 mesh 在不同 resolution 下选到 top/bottom 不同层导致 `max_compression_m` 跨分辨率不可比；同时将 rebounce/resolution saturation 的 Young's modulus sweep 范围从 `8e4-8e5` 提高到 `8e5-8e6`。
 - `2026-05-21`：跑完 resolution saturation 实验（`scripts/isaaclab_trampoline_resolution_saturation.py`，`logs/isaaclab_trampoline_resolution_saturation_runs/20260520_232221__resolution_saturation/`）。结论：饱和假设失败，提升分辨率系统性增大形变量最终穿膜，不存在收敛上限；无外部参考真值，无法量化低分辨率的离散误差下限。分辨率选择只有数值稳定性上限（`res=50` 全组穿膜），没有可量化的误差下限，后续按计算代价固定 `simulation_hexahedral_resolution=15`（训练慢时可降到 10）。
 - `2026-05-21`：更新 Phase 1 ball-drop 指标定义：不再把 contact-to-release duration 作为核心稳定指标；新增从 `t=0` 开始、基于小球 `|vz|` 连续低于阈值的 `stable_time_s`，并用 armed/hysteresis 状态机记录第一次有效 apex 的 `first_apex_time_s` 和 `rebound_height_m`，避免速度抖动造成重复 apex。
+- `2026-05-23`：清理并合并 IsaacLab trampoline ball-drop 脚本：将核心入口从 `scripts/isaaclab_trampoline_phase1_condition.py` 重命名为 `scripts/isaaclab_trampoline_ball_drop.py`；移除旧版 `scripts/isaaclab_ball_drop_trampoline_sweep.py`、`scripts/isaaclab_trampoline_phase1_sweep.py`、`scripts/trampoline-DeformableObject.py` 和独立 `scripts/isaaclab_trampoline_resolution_saturation.py` driver；新脚本同时支持单次运行、`--sweep PARAM VALUE...` CLI sweep 和 `--sweep_config` YAML/JSON sweep；单次 artifact 根目录为 `logs/isaaclab_trampoline_ball_drop_runs/`，文件名为 `ball_drop_summary.csv`、`ball_drop_trajectory.csv`、`ball_drop_vertical_state.png`、`ball_drop_compression.png` 和 `ball_drop_video.mp4`；sweep 汇总文件为 `ball_drop_sweep_summary.csv`。
+- `2026-05-23`：更新 `scripts/mujoco_ball_drop_trampoline_sweep.py`：默认只跑 nominal；`mass/radius/spacing/solref/solimp/ball_x` 变成单次参数；新增 `--sweep PARAM VALUE...` 和 `--sweep_config` YAML/JSON sweep；默认给每个 condition 写 `ball_drop_video.mp4` 到 summary CSV 同目录，传 `--no-video` 或在 sweep config 中设 `video: false` 可关闭，并在 CSV 中记录 `video_path`。
+- `2026-05-23`：更新 `scripts/mujoco_ball_drop_trampoline_sweep.py` 的默认 artifact 输出：不传 `--output` 时自动创建 `logs/mujoco_ball_drop_runs/<timestamp+参数>/`，写出与 IsaacLab ball-drop 同名的 `ball_drop_summary.csv`、`ball_drop_trajectory.csv`、`ball_drop_vertical_state.png`、`ball_drop_compression.png` 和 `ball_drop_video.mp4`；sweep 模式每个 condition 使用独立子目录并在 sweep 根目录写 `ball_drop_sweep_summary.csv`；仍允许 `--output` 覆盖 summary CSV 路径。
+- `2026-05-23`：历史短验证运行 MuJoCo 单条件 2 次（`--sim_time 0.01` 和 `--sim_time 0.01 --label video_default_check`），分别验证旧版自动 CSV 路径和默认 video 写出；这些运行只验证 artifact 写出，不作为动态响应结论。
+- `2026-05-23`：验证 MuJoCo 与 IsaacLab 同名 artifact 输出：运行 MuJoCo 单条件 1 次（`--sim_time 0.01 --label artifact_match_check --output logs/mujoco_ball_drop_runs/artifact_match_check/ball_drop_summary.csv`），输出目录为 `logs/mujoco_ball_drop_runs/artifact_match_check/`，非空文件包括 `ball_drop_summary.csv`、`ball_drop_trajectory.csv`、`ball_drop_vertical_state.png`、`ball_drop_compression.png`、`ball_drop_video.mp4`；该运行只验证 artifact 命名和写出，不作为动态响应结论。
+- `2026-05-23`：验证 MuJoCo sweep artifact 输出：运行 MuJoCo 2 条件 sweep 1 次（`--no-video --sim_time 0.002 --output logs/mujoco_ball_drop_runs/artifact_sweep_check/ball_drop_sweep_summary.csv --sweep mass 10 30`），输出目录为 `logs/mujoco_ball_drop_runs/artifact_sweep_check/`；根目录写出 `ball_drop_sweep_summary.csv`，`mass_10/` 和 `mass_30/` 子目录各写出非空 `ball_drop_summary.csv`、`ball_drop_trajectory.csv`、`ball_drop_vertical_state.png`、`ball_drop_compression.png`；该运行只验证 sweep artifact 命名和写出，不作为动态响应结论。
 - 后续每次实验补充：实验次数、仿真器、输出路径、指标结果、失败模式、参数调整、结论。

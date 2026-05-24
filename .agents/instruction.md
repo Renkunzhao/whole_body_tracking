@@ -20,10 +20,8 @@
 
 - IsaacLab trampoline：`source/whole_body_tracking/whole_body_tracking/utils/trampoline_deformable.py`
 - MuJoCo trampoline：`/home/rkz/code/unitree_ws/src/unitree_mujoco/unitree_robots/go2/trampoline.xml`
-- MuJoCo ball-drop sweep：`scripts/mujoco_ball_drop_trampoline_sweep.py`
-- IsaacLab material/reset-time ball-drop sweep：`scripts/isaaclab_ball_drop_trampoline_sweep.py`
-- IsaacLab Phase 1 单条件脚本：`scripts/isaaclab_trampoline_phase1_condition.py`
-- IsaacLab Phase 1 driver：`scripts/isaaclab_trampoline_phase1_sweep.py`
+- MuJoCo ball-drop 单次/sweep 统一脚本：`scripts/mujoco_ball_drop_trampoline_sweep.py`
+- IsaacLab ball-drop 单次/sweep 统一脚本：`scripts/isaaclab_trampoline_ball_drop.py`
 - 现有 policy 评测脚本：`scripts/rsl_rl/eval-rebounce.py`
 - 相关部署/解释文档：`.codex/skills/trampoline/task6-mujoco-deploy.md`
 
@@ -135,27 +133,30 @@
 
 ### 脚本和输出规范
 
-- 单条件脚本：`scripts/isaaclab_trampoline_phase1_condition.py`
-- Phase 1 driver：`scripts/isaaclab_trampoline_phase1_sweep.py`
-- Resolution saturation driver：`scripts/isaaclab_trampoline_resolution_saturation.py`
-- 单次运行 artifact 根目录：`logs/isaaclab_trampoline_phase1_runs/`
-- Resolution saturation artifact 根目录：`logs/isaaclab_trampoline_resolution_saturation_runs/`
-- 每次单条件运行会按时间和参数创建独立文件夹，目录名包含 `label / sim_time / sim_dt / ball_height / ball_mass / sim_resolution / thickness / trampoline_mass / youngs_modulus / elasticity_damping / damping_scale`。
-- 单次运行文件夹内包含：
-  - `phase1_summary.csv`：单次 summary 指标。
-  - `phase1_trajectory.csv`：逐步记录小球位置/速度、trampoline top-center 位置/速度、compression、stable/apex/contact/release 标志。
-  - `phase1_vertical_state.png`：小球和 trampoline 中心点竖直位置/速度的 2x1 图。
-  - `phase1_compression.png`：trampoline 中心压缩量图。
-  - `phase1_video.mp4`：视频。
-- CSV 路径由运行目录自动生成，不通过 `--output` 手动指定。
-- Resolution saturation 汇总输出：`resolution_saturation_runs.csv` 和 `resolution_saturation_group_summary.csv`。
+- MuJoCo 统一脚本：`scripts/mujoco_ball_drop_trampoline_sweep.py`
+- MuJoCo 运行 artifact 根目录：`logs/mujoco_ball_drop_runs/`
+- MuJoCo 单次运行会按时间和参数创建独立文件夹，目录名包含 `label / sim_time / ball_height / trampoline_mass / radius / spacing / ball_x / solref`；传 `--output` 时可覆盖 summary CSV 路径。
+- IsaacLab 统一脚本：`scripts/isaaclab_trampoline_ball_drop.py`
+- IsaacLab 运行 artifact 根目录：`logs/isaaclab_trampoline_ball_drop_runs/`
+- IsaacLab 单次运行会按时间和参数创建独立文件夹，目录名包含 `label / sim_time / sim_dt / ball_height / ball_mass / sim_resolution / thickness / trampoline_mass / youngs_modulus / elasticity_damping / damping_scale`。
+- MuJoCo 和 IsaacLab 单次运行文件夹内都包含：
+  - `ball_drop_summary.csv`：单次 summary 指标。
+  - `ball_drop_trajectory.csv`：逐步记录小球位置/速度、trampoline top-center 位置/速度、compression、stable/apex/contact/release 标志。
+  - `ball_drop_vertical_state.png`：小球和 trampoline 中心点竖直位置/速度的 2x1 图。
+  - `ball_drop_compression.png`：trampoline 中心压缩量图。
+  - `ball_drop_video.mp4`：视频；MuJoCo 和 IsaacLab 都可传 `--no-video` 关闭。
+- 单次 summary CSV 路径由运行目录自动生成；MuJoCo 可用 `--output` 覆盖，IsaacLab 不通过 `--output` 手动指定。
+- sweep 模式仍由同一脚本执行：传 `--sweep PARAM VALUE...` 或 `--sweep_config YAML_OR_JSON` 时，脚本会展开条件，并在 sweep 根目录写出 `ball_drop_sweep_summary.csv`。
 
 示例命令：
 
 ```bash
-python scripts/isaaclab_trampoline_phase1_condition.py --headless --label nominal
-python scripts/isaaclab_trampoline_phase1_sweep.py --headless
-python scripts/isaaclab_trampoline_resolution_saturation.py --headless --no-video
+python scripts/mujoco_ball_drop_trampoline_sweep.py --label nominal
+python scripts/mujoco_ball_drop_trampoline_sweep.py --sweep solref "0.012 1" "0.015 1" "0.018 1"
+python scripts/mujoco_ball_drop_trampoline_sweep.py --sweep_config mujoco_sweep.yaml
+python scripts/isaaclab_trampoline_ball_drop.py --headless --label nominal
+python scripts/isaaclab_trampoline_ball_drop.py --headless --no-video --sweep_name damping_sweep --sweep elasticity_damping 0.01 0.03 0.1
+python scripts/isaaclab_trampoline_ball_drop.py --sweep_config sweep.yaml
 ```
 
 ## 后续测试
