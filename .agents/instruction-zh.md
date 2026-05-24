@@ -20,10 +20,8 @@
 
 - IsaacLab trampoline：`source/whole_body_tracking/whole_body_tracking/utils/trampoline_deformable.py`
 - MuJoCo trampoline：`/home/rkz/code/unitree_ws/src/unitree_mujoco/unitree_robots/go2/trampoline.xml`
-- MuJoCo ball-drop sweep：`scripts/mujoco_ball_drop_trampoline_sweep.py`
-- IsaacLab material/reset-time ball-drop sweep：`scripts/isaaclab_ball_drop_trampoline_sweep.py`
-- IsaacLab Phase 1 单条件脚本：`scripts/isaaclab_trampoline_phase1_condition.py`
-- IsaacLab Phase 1 driver：`scripts/isaaclab_trampoline_phase1_sweep.py`
+- MuJoCo ball-drop 单次/sweep 统一脚本：`scripts/mujoco_trampoline_ball_drop.py`
+- IsaacLab ball-drop 单次/sweep 统一脚本：`scripts/isaaclab_trampoline_ball_drop.py`
 - 现有 policy 评测脚本：`scripts/rsl_rl/eval-rebounce.py`
 - 相关部署/解释文档：`.codex/skills/trampoline/task6-mujoco-deploy.md`
 
@@ -116,7 +114,7 @@
 
 1. 固定其他参数，逐步增加 `simulation_hexahedral_resolution`，用 ball-drop 动态指标判断“分辨率增加带来的变软/响应变化是否达到上限”。
 2. 条件：小球质量为 G1 URDF 总质量的一半（当前约 `16.67 kg`），小球高度 `1.0 m`；只组合 `thickness=0.03/0.10`、`mass+youngs_modulus` 的 DR 上下限、`elasticity_damping+damping_scale` 的 DR 上下限；当前 Young's modulus sweep 边界为 `8e5 / 8e6`。
-3. 如果各参数组在某个 resolution 后 top-center `max_compression_m`、`stable_time_s`、`first_apex_time_s`、`rebound_height_m` 连续两档相对变化都小于阈值（默认 `5%`），则认为该组基本达到上限；只有所有组都有推荐值时才输出全局候选分辨率，并取各组推荐值的最大值。
+3. 如果各参数组在某个 resolution 后 top-center `max_compression_m`、`stable_time_s`、`first_apex_time_s`、`first_apex_height_m` 连续两档相对变化都小于阈值（默认 `5%`），则认为该组基本达到上限；只有所有组都有推荐值时才输出全局候选分辨率，并取各组推荐值的最大值。
 
 - 测试结论（2026-05-21）：
    - **饱和假设失败**：提升分辨率会系统性增大形变量，最终导致穿膜，不存在"动态指标收敛到上限"的饱和点。无法用分辨率间的相对变化来判断哪个分辨率更准确，因为没有外部参考真值（实物数据或解析解），高分辨率结果本身也不可信。
@@ -155,27 +153,27 @@
 
 ### 脚本和输出规范
 
-- 单条件脚本：`scripts/isaaclab_trampoline_phase1_condition.py`
-- Phase 1 driver：`scripts/isaaclab_trampoline_phase1_sweep.py`
-- Resolution saturation driver：`scripts/isaaclab_trampoline_resolution_saturation.py`
-- 单次运行 artifact 根目录：`logs/isaaclab_trampoline_phase1_runs/`
-- Resolution saturation artifact 根目录：`logs/isaaclab_trampoline_resolution_saturation_runs/`
-- 每次单条件运行会按时间和参数创建独立文件夹，目录名包含 `label / sim_time / sim_dt / ball_height / ball_mass / sim_resolution / thickness / trampoline_mass / youngs_modulus / elasticity_damping / damping_scale`。
+- MuJoCo 统一脚本：`scripts/mujoco_trampoline_ball_drop.py`
+- IsaacLab 统一脚本：`scripts/isaaclab_trampoline_ball_drop.py`
+- MuJoCo 单次运行 artifact 根目录：`logs/mujoco_ball_drop_runs/`
+- IsaacLab 单次运行 artifact 根目录：`logs/isaaclab_trampoline_ball_drop_runs/`
+- 每次运行会按时间和关键仿真参数创建独立文件夹。
 - 单次运行文件夹内包含：
-  - `phase1_summary.csv`：单次 summary 指标。
-  - `phase1_trajectory.csv`：逐步记录小球位置/速度、trampoline top-center 位置/速度、compression、stable/apex/contact/release 标志。
-  - `phase1_vertical_state.png`：小球和 trampoline 中心点竖直位置/速度的 2x1 图。
-  - `phase1_compression.png`：trampoline 中心压缩量图。
-  - `phase1_video.mp4`：视频。
-- CSV 路径由运行目录自动生成，不通过 `--output` 手动指定。
-- Resolution saturation 汇总输出：`resolution_saturation_runs.csv` 和 `resolution_saturation_group_summary.csv`。
+  - `ball_drop_summary.csv`：单次 summary 指标。
+  - `ball_drop_trajectory.csv`：逐步记录小球位置/速度、trampoline top-center 位置/速度、compression、stable/apex/contact/release 标志。
+  - `ball_drop_params.yaml`：本次运行参数，和 summary CSV 存放在同一目录。
+  - `ball_drop_vertical_state.png`：小球和 trampoline 中心点竖直位置/速度的 2x1 图。
+  - `ball_drop_compression.png`：trampoline 中心压缩量图。
+  - `ball_drop_video.mp4`：视频。
+- sweep 模式仍由同一脚本执行：传 `--sweep PARAM VALUE...` 或 `--sweep_config YAML_OR_JSON`，在 sweep 根目录写出 `ball_drop_sweep_summary.csv`。
 
 示例命令：
 
 ```bash
-python scripts/isaaclab_trampoline_phase1_condition.py --headless --label nominal
-python scripts/isaaclab_trampoline_phase1_sweep.py --headless
-python scripts/isaaclab_trampoline_resolution_saturation.py --headless --no-video
+python scripts/mujoco_trampoline_ball_drop.py --label nominal
+python scripts/mujoco_trampoline_ball_drop.py --sweep solref "0.012 1" "0.015 1" "0.018 1"
+python scripts/isaaclab_trampoline_ball_drop.py --headless --label nominal
+python scripts/isaaclab_trampoline_ball_drop.py --headless --no-video --sweep_name damping_sweep --sweep elasticity_damping 0.01 0.03 0.1
 ```
 
 ### Phase 1 结论

@@ -19,6 +19,7 @@ DEFAULT_ASSET_DIR = Path("/home/rkz/code/unitree_ws/src/unitree_mujoco/unitree_r
 DEFAULT_OUTPUT_ROOT = Path("logs/mujoco_ball_drop_runs")
 SUMMARY_FILENAME = "ball_drop_summary.csv"
 TRAJECTORY_FILENAME = "ball_drop_trajectory.csv"
+PARAMS_FILENAME = "ball_drop_params.yaml"
 VIDEO_FILENAME = "ball_drop_video.mp4"
 VERTICAL_STATE_PLOT_FILENAME = "ball_drop_vertical_state.png"
 COMPRESSION_PLOT_FILENAME = "ball_drop_compression.png"
@@ -400,6 +401,50 @@ def write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
         writer.writerows(rows)
 
 
+def format_yaml_scalar(value: Any) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if value is None:
+        return "null"
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float):
+        if math.isnan(value):
+            return ".nan"
+        if math.isinf(value):
+            return ".inf" if value > 0.0 else "-.inf"
+        return f"{value:g}"
+    return json.dumps(str(value), ensure_ascii=False)
+
+
+def format_yaml_lines(value: Any, indent: int = 0) -> list[str]:
+    prefix = " " * indent
+    if isinstance(value, dict):
+        lines = []
+        for key, item in value.items():
+            if isinstance(item, dict | list):
+                lines.append(f"{prefix}{key}:")
+                lines.extend(format_yaml_lines(item, indent + 2))
+            else:
+                lines.append(f"{prefix}{key}: {format_yaml_scalar(item)}")
+        return lines
+    if isinstance(value, list):
+        lines = []
+        for item in value:
+            if isinstance(item, dict | list):
+                lines.append(f"{prefix}-")
+                lines.extend(format_yaml_lines(item, indent + 2))
+            else:
+                lines.append(f"{prefix}- {format_yaml_scalar(item)}")
+        return lines
+    return [f"{prefix}{format_yaml_scalar(value)}"]
+
+
+def write_yaml(path: Path, data: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(format_yaml_lines(data)) + "\n", encoding="utf-8")
+
+
 def plot_timeseries(rows: list[dict[str, Any]], output_dir: Path) -> list[Path]:
     try:
         import matplotlib
@@ -479,6 +524,7 @@ def make_video_writer(args: argparse.Namespace, output_dir: Path):
 def run_condition(args: argparse.Namespace, label: str, condition: dict[str, Any], run_dir: Path, summary_path: Path) -> dict[str, Any]:
     run_dir.mkdir(parents=True, exist_ok=True)
     trajectory_path = run_dir / TRAJECTORY_FILENAME
+    params_path = run_dir / PARAMS_FILENAME
 
     model = build_model(
         args.asset_dir,
@@ -707,7 +753,6 @@ def run_condition(args: argparse.Namespace, label: str, condition: dict[str, Any
         "first_min_ball_z_time_s": finite_or_nan(first_min_ball_z_time_s),
         "first_apex_height_m": finite_or_nan(first_apex_height_m),
         "first_apex_time_s": finite_or_nan(first_apex_time_s),
-        "rebound_height_m": finite_or_nan(first_apex_height_m),
         "second_apex_height_m": finite_or_nan(second_apex_height_m),
         "second_apex_time_s": finite_or_nan(second_apex_time_s),
         "damping_ratio": finite_or_nan(damping_ratio),
@@ -727,10 +772,35 @@ def run_condition(args: argparse.Namespace, label: str, condition: dict[str, Any
         "video_path": video_path_text,
     }
     write_csv(summary_path, [row])
+    write_yaml(
+        params_path,
+        {
+            "simulator": "MuJoCo",
+            "mode": "single",
+            "script": str(Path(__file__).resolve()),
+            "label": label,
+            "asset_dir": str(args.asset_dir),
+            "run_dir": str(run_dir),
+            "parameters": condition,
+            "options": {
+                "video": bool(args.video),
+                "video_width": args.video_width,
+                "video_height": args.video_height,
+                "video_fps": args.video_fps,
+            },
+            "artifacts": {
+                "summary_csv": str(summary_path),
+                "trajectory_csv": str(trajectory_path),
+                "plots": [str(plot_path) for plot_path in plot_paths],
+                "video_mp4": video_path_text or None,
+            },
+        },
+    )
 
     print(row, flush=True)
     print(f"WROTE {summary_path}", flush=True)
     print(f"WROTE {trajectory_path}", flush=True)
+    print(f"WROTE {params_path}", flush=True)
     for plot_path in plot_paths:
         print(f"WROTE {plot_path}", flush=True)
     if args.video:
@@ -750,7 +820,28 @@ def main() -> None:
 
     if sweep_mode:
         write_csv(output_path, rows)
+        params_path = output_path.parent / PARAMS_FILENAME
+        write_yaml(
+            params_path,
+            {
+                "simulator": "MuJoCo",
+                "mode": "sweep",
+                "script": str(Path(__file__).resolve()),
+                "sweep_config": str(args.sweep_config) if args.sweep_config is not None else None,
+                "asset_dir": str(args.asset_dir),
+                "output": str(output_path),
+                "conditions": [{"label": label, "parameters": condition} for label, condition in conditions],
+                "options": {
+                    "video": bool(args.video),
+                    "video_width": args.video_width,
+                    "video_height": args.video_height,
+                    "video_fps": args.video_fps,
+                },
+                "artifacts": {"sweep_summary_csv": str(output_path)},
+            },
+        )
         print(f"WROTE {output_path}", flush=True)
+        print(f"WROTE {params_path}", flush=True)
     print(f"RUN_DIR {output_path.parent}", flush=True)
 
 

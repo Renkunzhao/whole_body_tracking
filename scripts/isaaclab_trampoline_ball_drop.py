@@ -42,6 +42,7 @@ DEFAULT_CAMERA_EYE = (3.0, -3.0, 2.2)
 DEFAULT_CAMERA_TARGET = (0.0, 0.0, -0.05)
 SUMMARY_FILENAME = "ball_drop_summary.csv"
 TRAJECTORY_FILENAME = "ball_drop_trajectory.csv"
+PARAMS_FILENAME = "ball_drop_params.yaml"
 VIDEO_FILENAME = "ball_drop_video.mp4"
 VERTICAL_STATE_PLOT_FILENAME = "ball_drop_vertical_state.png"
 COMPRESSION_PLOT_FILENAME = "ball_drop_compression.png"
@@ -56,8 +57,10 @@ SINGLE_RUN_FIELDS: dict[str, tuple[str, type]] = {
     "trampoline_mass": ("--trampoline_mass", float),
     "sim_resolution": ("--sim_resolution", int),
     "youngs_modulus": ("--youngs_modulus", float),
+    "dynamic_friction": ("--dynamic_friction", float),
     "elasticity_damping": ("--elasticity_damping", float),
     "damping_scale": ("--damping_scale", float),
+    "poissons_ratio": ("--poissons_ratio", float),
     "stable_vz_threshold": ("--stable_vz_threshold", float),
     "stable_window_s": ("--stable_window_s", float),
     "apex_vz_hysteresis": ("--apex_vz_hysteresis", float),
@@ -240,6 +243,50 @@ def write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
         writer.writerows(rows)
 
 
+def format_yaml_scalar(value: Any) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if value is None:
+        return "null"
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float):
+        if math.isnan(value):
+            return ".nan"
+        if math.isinf(value):
+            return ".inf" if value > 0.0 else "-.inf"
+        return f"{value:g}"
+    return json.dumps(str(value), ensure_ascii=False)
+
+
+def format_yaml_lines(value: Any, indent: int = 0) -> list[str]:
+    prefix = " " * indent
+    if isinstance(value, dict):
+        lines = []
+        for key, item in value.items():
+            if isinstance(item, dict | list):
+                lines.append(f"{prefix}{key}:")
+                lines.extend(format_yaml_lines(item, indent + 2))
+            else:
+                lines.append(f"{prefix}{key}: {format_yaml_scalar(item)}")
+        return lines
+    if isinstance(value, list):
+        lines = []
+        for item in value:
+            if isinstance(item, dict | list):
+                lines.append(f"{prefix}-")
+                lines.extend(format_yaml_lines(item, indent + 2))
+            else:
+                lines.append(f"{prefix}- {format_yaml_scalar(item)}")
+        return lines
+    return [f"{prefix}{format_yaml_scalar(value)}"]
+
+
+def write_yaml(path: Path, data: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(format_yaml_lines(data)) + "\n", encoding="utf-8")
+
+
 def build_child_command(args: argparse.Namespace, condition: dict[str, Any], run_dir: Path) -> list[str]:
     cmd = [sys.executable, str(Path(__file__).resolve()), "--label", str(condition["label"]), "--run_dir", str(run_dir)]
     for field_name, (flag, _) in SINGLE_RUN_FIELDS.items():
@@ -285,6 +332,9 @@ def apply_sweep_config_options(args: argparse.Namespace, config: dict[str, Any])
         args.video = bool(config["video"])
     if "headless" in config and hasattr(args, "headless"):
         args.headless = bool(config["headless"])
+    for field_name in ("video_width", "video_height", "video_fps"):
+        if field_name in config:
+            setattr(args, field_name, int(config[field_name]))
 
 
 def run_sweep(args: argparse.Namespace) -> None:
@@ -298,8 +348,26 @@ def run_sweep(args: argparse.Namespace) -> None:
         run_dir = sweep_root / sanitize_token(str(condition["label"]))
         rows.append(run_child_condition(args, condition, run_dir))
     summary_path = sweep_root / SWEEP_SUMMARY_FILENAME
+    params_path = sweep_root / PARAMS_FILENAME
     write_csv(summary_path, rows)
+    write_yaml(
+        params_path,
+        {
+            "simulator": "IsaacLab",
+            "mode": "sweep",
+            "script": str(Path(__file__).resolve()),
+            "sweep_config": str(args.sweep_config) if args.sweep_config is not None else None,
+            "sweep_name": args.sweep_name,
+            "artifact_root": str(args.artifact_root),
+            "run_dir": str(sweep_root),
+            "video": bool(args.video),
+            "headless": bool(getattr(args, "headless", False)),
+            "conditions": conditions,
+            "artifacts": {"sweep_summary_csv": str(summary_path)},
+        },
+    )
     print(f"WROTE {summary_path}", flush=True)
+    print(f"WROTE {params_path}", flush=True)
     print(f"RUN_DIR {sweep_root}", flush=True)
 
 
@@ -541,6 +609,7 @@ def main() -> None:
     video_path = run_dir / VIDEO_FILENAME
     timeseries_path = run_dir / TRAJECTORY_FILENAME
     summary_path = run_dir / SUMMARY_FILENAME
+    params_path = run_dir / PARAMS_FILENAME
 
     sim = SimulationContext(sim_utils.SimulationCfg(dt=args_cli.sim_dt, device=args_cli.device))
     scene_cfg = BallDropSceneCfg(num_envs=1, env_spacing=4.0, replicate_physics=False)
@@ -774,7 +843,6 @@ def main() -> None:
             "first_min_ball_z_time_s": finite_or_nan(first_min_ball_z_time_s),
             "first_apex_height_m": finite_or_nan(first_apex_height_m),
             "first_apex_time_s": finite_or_nan(first_apex_time_s),
-            "rebound_height_m": finite_or_nan(first_apex_height_m),
             "second_apex_height_m": finite_or_nan(second_apex_height_m),
             "second_apex_time_s": finite_or_nan(second_apex_time_s),
             "damping_ratio": finite_or_nan(second_apex_height_m / first_apex_height_m if first_apex_found and second_apex_found and first_apex_height_m > 0.0 else float("nan")),
@@ -787,10 +855,33 @@ def main() -> None:
 
         write_summary_row(summary_path, row)
         plot_paths = plot_timeseries(rows, run_dir)
+        write_yaml(
+            params_path,
+            {
+                "simulator": "IsaacLab",
+                "mode": "single",
+                "script": str(Path(__file__).resolve()),
+                "label": args_cli.label,
+                "run_dir": str(run_dir),
+                "parameters": {field_name: getattr(args_cli, field_name) for field_name in SINGLE_RUN_FIELDS},
+                "options": {
+                    "video": bool(args_cli.video),
+                    "headless": bool(getattr(args_cli, "headless", False)),
+                    "device": getattr(args_cli, "device", None),
+                },
+                "artifacts": {
+                    "summary_csv": str(summary_path),
+                    "trajectory_csv": str(timeseries_path),
+                    "plots": [str(plot_path) for plot_path in plot_paths],
+                    "video_mp4": str(video_path) if args_cli.video else None,
+                },
+            },
+        )
 
         print(row, flush=True)
         print(f"WROTE {summary_path}", flush=True)
         print(f"WROTE {timeseries_path}", flush=True)
+        print(f"WROTE {params_path}", flush=True)
         for plot_path in plot_paths:
             print(f"WROTE {plot_path}", flush=True)
         if args_cli.video:

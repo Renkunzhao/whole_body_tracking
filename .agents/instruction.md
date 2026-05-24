@@ -20,7 +20,7 @@ Every experiment log entry must include:
 
 - IsaacLab trampoline：`source/whole_body_tracking/whole_body_tracking/utils/trampoline_deformable.py`
 - MuJoCo trampoline：`/home/rkz/code/unitree_ws/src/unitree_mujoco/unitree_robots/go2/trampoline.xml`
-- MuJoCo ball-drop 单次/sweep 统一脚本：`scripts/mujoco_ball_drop_trampoline_sweep.py`
+- MuJoCo ball-drop 单次/sweep 统一脚本：`scripts/mujoco_trampoline_ball_drop.py`
 - IsaacLab ball-drop 单次/sweep 统一脚本：`scripts/isaaclab_trampoline_ball_drop.py`
 - 现有 policy 评测脚本：`scripts/rsl_rl/eval-rebounce.py`
 - 相关部署/解释文档：`.codex/skills/trampoline/task6-mujoco-deploy.md`
@@ -115,7 +115,7 @@ Balls of different masses dropped from multiple heights. IsaacLab has no rigid-d
 
 1. Fix all other parameters, sweep `simulation_hexahedral_resolution`, and use ball-drop dynamic metrics to determine whether the softening effect of increasing resolution reaches a saturation limit.
 2. Conditions: ball mass = half of G1 URDF total mass (~`16.67 kg`), ball height = `1.0 m`; combine `thickness=0.03/0.10` with DR boundary values of `mass+youngs_modulus` and `elasticity_damping+damping_scale`; Young's modulus sweep range `8e5 / 8e6`.
-3. If for a given group all four top-center metrics (`max_compression_m`, `stable_time_s`, `first_apex_time_s`, `rebound_height_m`) change by less than the threshold (default `5%`) for two consecutive resolution steps, the group is considered saturated. A global candidate resolution is output only when all groups have a recommendation; the maximum across groups is taken.
+3. If for a given group all four top-center metrics (`max_compression_m`, `stable_time_s`, `first_apex_time_s`, `first_apex_height_m`) change by less than the threshold (default `5%`) for two consecutive resolution steps, the group is considered saturated. A global candidate resolution is output only when all groups have a recommendation; the maximum across groups is taken.
 
 - Test conclusions (2026-05-21):
    - **Saturation hypothesis failed**: increasing resolution systematically increases deformation, eventually causing fallthrough. There is no saturation point where dynamic metrics converge to an upper limit. Relative changes between resolution levels cannot be used to judge which resolution is more accurate, because there is no external ground truth (physical measurements or analytic solutions), and high-resolution results are themselves unreliable.
@@ -133,7 +133,7 @@ Notes:
    - Whether fallthrough occurs with g1/go2 fixed PD
    - Whether a hopping policy can be trained
 
-- MuJoCo 统一脚本：`scripts/mujoco_ball_drop_trampoline_sweep.py`
+- MuJoCo 统一脚本：`scripts/mujoco_trampoline_ball_drop.py`
 - MuJoCo 运行 artifact 根目录：`logs/mujoco_ball_drop_runs/`
 - MuJoCo 单次运行会按时间和参数创建独立文件夹，目录名包含 `label / sim_time / ball_height / trampoline_mass / radius / spacing / ball_x / solref`；传 `--output` 时可覆盖 summary CSV 路径。
 - IsaacLab 统一脚本：`scripts/isaaclab_trampoline_ball_drop.py`
@@ -142,6 +142,7 @@ Notes:
 - MuJoCo 和 IsaacLab 单次运行文件夹内都包含：
   - `ball_drop_summary.csv`：单次 summary 指标。
   - `ball_drop_trajectory.csv`：逐步记录小球位置/速度、trampoline top-center 位置/速度、compression、stable/apex/contact/release 标志。
+  - `ball_drop_params.yaml`：本次运行参数，和 summary CSV 存放在同一目录。
   - `ball_drop_vertical_state.png`：小球和 trampoline 中心点竖直位置/速度的 2x1 图。
   - `ball_drop_compression.png`：trampoline 中心压缩量图。
   - `ball_drop_video.mp4`：视频；MuJoCo 和 IsaacLab 都可传 `--no-video` 关闭。
@@ -167,27 +168,26 @@ Key conclusions:
 
 ### Scripts and output conventions
 
-- Single-condition script: `scripts/isaaclab_trampoline_phase1_condition.py`
-- Phase 1 driver: `scripts/isaaclab_trampoline_phase1_sweep.py`
-- Resolution saturation driver: `scripts/isaaclab_trampoline_resolution_saturation.py`
-- Per-run artifact root: `logs/isaaclab_trampoline_phase1_runs/`
-- Resolution saturation artifact root: `logs/isaaclab_trampoline_resolution_saturation_runs/`
-- Each run creates a timestamped directory whose name encodes `label / sim_time / sim_dt / ball_height / ball_mass / sim_resolution / thickness / trampoline_mass / youngs_modulus / elasticity_damping / damping_scale`.
+- MuJoCo unified script: `scripts/mujoco_trampoline_ball_drop.py`
+- IsaacLab unified script: `scripts/isaaclab_trampoline_ball_drop.py`
+- MuJoCo per-run artifact root: `logs/mujoco_ball_drop_runs/`
+- IsaacLab per-run artifact root: `logs/isaaclab_trampoline_ball_drop_runs/`
+- Each run creates a timestamped directory whose name encodes the label and key simulator parameters.
 - Per-run directory contains:
-  - `phase1_summary.csv`: single-run summary metrics.
-  - `phase1_trajectory.csv`: per-step ball position/velocity, trampoline top-center position/velocity, compression, and stable/apex flags.
-  - `phase1_vertical_state.png`: 2×1 plot of ball and trampoline center vertical position/velocity.
-  - `phase1_compression.png`: trampoline center compression over time.
-  - `phase1_video.mp4`: video.
-- CSV paths are generated automatically from the run directory; do not specify via `--output`.
-- Resolution saturation summary outputs: `resolution_saturation_runs.csv` and `resolution_saturation_group_summary.csv`.
+  - `ball_drop_summary.csv`: single-run summary metrics.
+  - `ball_drop_trajectory.csv`: per-step ball position/velocity, trampoline top-center position/velocity, compression, and stable/apex/contact/release flags.
+  - `ball_drop_params.yaml`: run parameters, stored in the same directory as the summary CSV.
+  - `ball_drop_vertical_state.png`: 2×1 plot of ball and trampoline center vertical position/velocity.
+  - `ball_drop_compression.png`: trampoline center compression over time.
+  - `ball_drop_video.mp4`: video.
+- Sweep mode uses the same script with `--sweep PARAM VALUE...` or `--sweep_config YAML_OR_JSON`, and writes `ball_drop_sweep_summary.csv` in the sweep root.
 
 Example commands:
 
 ```bash
-python scripts/mujoco_ball_drop_trampoline_sweep.py --label nominal
-python scripts/mujoco_ball_drop_trampoline_sweep.py --sweep solref "0.012 1" "0.015 1" "0.018 1"
-python scripts/mujoco_ball_drop_trampoline_sweep.py --sweep_config mujoco_sweep.yaml
+python scripts/mujoco_trampoline_ball_drop.py --label nominal
+python scripts/mujoco_trampoline_ball_drop.py --sweep solref "0.012 1" "0.015 1" "0.018 1"
+python scripts/mujoco_trampoline_ball_drop.py --sweep_config mujoco_sweep.yaml
 python scripts/isaaclab_trampoline_ball_drop.py --headless --label nominal
 python scripts/isaaclab_trampoline_ball_drop.py --headless --no-video --sweep_name damping_sweep --sweep elasticity_damping 0.01 0.03 0.1
 python scripts/isaaclab_trampoline_ball_drop.py --sweep_config sweep.yaml

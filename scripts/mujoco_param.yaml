@@ -1,0 +1,23 @@
+label: mujoco_nominal
+
+base:
+  sim_time: 4.0
+  ball_mass: 4.02
+  ball_height: 1.0
+
+  mass: 100.0
+  radius: 0.03
+  spacing: 1.5
+  solref: "0.01 1"
+  solimp: "0.8 0.9 0.001 0.1 6"
+  ball_x: 0.0
+
+  force_threshold: 0.001
+  stable_vz_threshold: 0.05
+  stable_window_s: 0.2
+  apex_vz_hysteresis: 0.05
+
+video: true
+video_width: 1280
+video_height: 720
+video_fps: 60

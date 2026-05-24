@@ -17,8 +17,8 @@ import numpy as np
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-MUJOCO_SCRIPT = SCRIPT_DIR / "mujoco_ball_drop_trampoline_sweep.py"
-ISAACLAB_CONDITION_SCRIPT = SCRIPT_DIR / "isaaclab_trampoline_phase1_condition.py"
+MUJOCO_SCRIPT = SCRIPT_DIR / "mujoco_trampoline_ball_drop.py"
+ISAACLAB_CONDITION_SCRIPT = SCRIPT_DIR / "isaaclab_trampoline_ball_drop.py"
 DEFAULT_ARTIFACT_ROOT = Path("logs/trampoline_phase2_material_alignment_runs")
 DEFAULT_MUJOCO_ASSET_DIR = Path("/home/rkz/code/unitree_ws/src/unitree_mujoco/unitree_robots/go2")
 G1_TOTAL_MASS_KG = 33.341142022
@@ -43,7 +43,7 @@ METRIC_FIELDS = {
     "max_compression_m": 0.1,
     "first_min_ball_z_m": 0.2,
     "first_min_ball_z_time_s": 0.5,
-    "rebound_height_m": 0.2,
+    "first_apex_height_m": 0.2,
     "first_apex_time_s": 1.0,
     "damping_ratio": 0.2,
     "stable_time_s": 2.0,
@@ -177,7 +177,6 @@ def resolve_mujoco_target(args: argparse.Namespace, run_root: Path) -> TargetPat
         return TargetPaths(args.mujoco_summary.expanduser().resolve(), args.mujoco_trajectory.expanduser().resolve())
 
     summary_path = run_root / "mujoco_target_summary.csv"
-    trajectory_dir = run_root / "mujoco_target_trajectory"
     cmd = [
         sys.executable,
         str(MUJOCO_SCRIPT),
@@ -185,22 +184,15 @@ def resolve_mujoco_target(args: argparse.Namespace, run_root: Path) -> TargetPat
         str(args.mujoco_asset_dir),
         "--output",
         str(summary_path),
-        "--trajectory_dir",
-        str(trajectory_dir),
         "--sim_time",
         str(args.sim_time),
         "--ball_mass",
         str(args.ball_mass),
         "--ball_height",
         str(args.ball_height),
-        "--solref",
-        "--radius",
-        "--mass",
-        "--spacing",
-        "--ball_x",
     ]
     run_command(cmd, dry_run=args.dry_run)
-    return TargetPaths(summary_path, trajectory_dir / "nominal_trajectory.csv")
+    return TargetPaths(summary_path, summary_path.parent / "ball_drop_trajectory.csv")
 
 
 def run_isaaclab_candidate(args: argparse.Namespace, run_root: Path, candidate: Candidate) -> tuple[Path, Path, Path]:
@@ -242,7 +234,7 @@ def run_isaaclab_candidate(args: argparse.Namespace, run_root: Path, candidate: 
         cmd.append("--headless")
     cmd.append("--video" if args.video else "--no-video")
     run_command(cmd, dry_run=args.dry_run)
-    return run_dir, run_dir / "phase1_summary.csv", run_dir / "phase1_trajectory.csv"
+    return run_dir, run_dir / "ball_drop_summary.csv", run_dir / "ball_drop_trajectory.csv"
 
 
 def read_one_row(path: Path) -> dict[str, str]:
@@ -341,8 +333,8 @@ def build_result_row(
         "candidate_max_compression_m": candidate_summary.get("max_compression_m", ""),
         "target_first_min_ball_z_m": target_summary.get("first_min_ball_z_m", ""),
         "candidate_first_min_ball_z_m": candidate_summary.get("first_min_ball_z_m", ""),
-        "target_rebound_height_m": target_summary.get("rebound_height_m", ""),
-        "candidate_rebound_height_m": candidate_summary.get("rebound_height_m", ""),
+        "target_first_apex_height_m": target_summary.get("first_apex_height_m", ""),
+        "candidate_first_apex_height_m": candidate_summary.get("first_apex_height_m", ""),
         "target_first_apex_time_s": target_summary.get("first_apex_time_s", ""),
         "candidate_first_apex_time_s": candidate_summary.get("first_apex_time_s", ""),
         "target_damping_ratio": target_summary.get("damping_ratio", ""),
