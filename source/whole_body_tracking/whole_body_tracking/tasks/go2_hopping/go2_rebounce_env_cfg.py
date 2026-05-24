@@ -60,6 +60,9 @@ TRAMPOLINE_FIXED_ELASTICITY_DAMPING_RANGE = (0.02, 0.02)
 TRAMPOLINE_FIXED_DAMPING_SCALE_RANGE = (1.0, 1.0)
 TRAMPOLINE_FIXED_POISSONS_RATIO_RANGE = (0.35, 0.35)
 REBOUNCE_HEIGHT_RANGE = (0.5, 0.5)
+MIXED_RESET_STATIC_PROBABILITY = 0.5
+MIXED_RESET_DROP_HEIGHT_RANGE = (0.3, 1.2)
+MIXED_RESET_STATIC_HEIGHT_OFFSET = 0.0
 TRAMPOLINE_DR_YOUNGS_MODULUS_RANGE = (1.0e5, 3.0e5)
 TRAMPOLINE_DR_MASS_RANGE = (7.5, 20.0)
 TRAMPOLINE_DR_DYNAMIC_FRICTION_RANGE = (0.4, 1.2)
@@ -375,17 +378,16 @@ class EventCfg:
         },
     )
 
-    # reset — rebounce: sample target apex height and initial drop height
-    # independently, teleport robot to the drop height with zero velocity and
-    # default joint pose, and write the sampled target into the command buffer.
-    reset_drop = EventTerm(
-        func=mdp.reset_drop_from_height,
+    reset_mixed = EventTerm(
+        func=mdp.reset_mixed_static_or_drop,
         mode="reset",
         params={
             "command_name": "hop",
             "asset_cfg": SceneEntityCfg("robot"),
+            "static_probability": MIXED_RESET_STATIC_PROBABILITY,
             "drop_height_offset": 0.0,
-            "drop_height_range": REBOUNCE_HEIGHT_RANGE,
+            "drop_height_range": MIXED_RESET_DROP_HEIGHT_RANGE,
+            "static_height_offset": MIXED_RESET_STATIC_HEIGHT_OFFSET,
         },
     )
 
@@ -565,7 +567,7 @@ class Go2RebounceEnvCfg(ManagerBasedRLEnvCfg):
 
     def apply_play_overrides(self):
         self.commands.hop.ranges.peak_height = REBOUNCE_HEIGHT_RANGE
-        self.events.reset_drop.params["drop_height_range"] = REBOUNCE_HEIGHT_RANGE
+        self.events.reset_mixed.params["drop_height_range"] = REBOUNCE_HEIGHT_RANGE
         return self
 
 
