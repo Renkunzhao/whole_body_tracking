@@ -91,6 +91,15 @@ Every experiment log entry must include:
 - edge constraint: `solref="0.01 1"`
 - edge constraint: `solimp="0.8 0.9 0.001 0.1 6"`
 
+### Current ball-drop alignment candidates
+
+These are empirical IsaacLab parameter candidates for the current MuJoCo trampoline endpoints. Use them as the response-alignment anchors when setting training DR ranges; full run metrics and conclusions remain in `.agents/logs.md`.
+
+| Target MuJoCo endpoint | MuJoCo parameters | IsaacLab candidate parameters | Key status |
+|---|---|---|---|
+| nominal / `mass=10` | `mass=10`, `radius=0.03`, `spacing=1.5`, `solref="0.01 1"`, `solimp="0.8 0.9 0.001 0.1 6"` | `thickness=0.05`, `trampoline_mass=7.5`, `youngs_modulus=1.5e5`, `elasticity_damping=0.005`, `damping_scale=0.5` | Dynamic compression and first rebound height are close; steady-state compression is still too shallow. See `.agents/logs.md` entries `20260524_011500` and the recorded candidate immediately after it. |
+| heavy / `mass=100` | `mass=100`, `radius=0.03`, `spacing=1.5`, `solref="0.01 1"`, `solimp="0.8 0.9 0.001 0.1 6"` | `thickness=0.05`, `trampoline_mass=20`, `youngs_modulus=3e5`, `elasticity_damping=0.005`, `damping_scale=0.5` | Dynamic compression is close; rebound remains slightly high and steady-state compression too shallow. See `.agents/logs.md` entries `20260524_013112` and the recorded candidate immediately after it. |
+
 
 ## Phase 1: IsaacLab fixed structural parameter study
 

@@ -47,6 +47,8 @@ VIDEO_FILENAME = "ball_drop_video.mp4"
 VERTICAL_STATE_PLOT_FILENAME = "ball_drop_vertical_state.png"
 COMPRESSION_PLOT_FILENAME = "ball_drop_compression.png"
 SWEEP_SUMMARY_FILENAME = "ball_drop_sweep_summary.csv"
+SWEEP_ANALYSIS_FILENAME = "ball_drop_sweep_analysis.csv"
+SWEEP_ANALYSIS_PLOT_FILENAME = "ball_drop_sweep_first_min_apex.png"
 
 SINGLE_RUN_FIELDS: dict[str, tuple[str, type]] = {
     "sim_time": ("--sim_time", float),
@@ -97,6 +99,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--sweep", action="append", nargs="+", default=[], metavar=("PARAM", "VALUE"), help="Cartesian-product sweep, e.g. --sweep youngs_modulus 8e5 8e6.")
     parser.add_argument("--sweep_config", type=Path, default=None, help="YAML or JSON file with base, sweep, and/or conditions.")
     parser.add_argument("--sweep_name", type=str, default="sweep", help="Name used for the auto-created sweep directory.")
+    parser.add_argument("--sweep_xscale", choices=("linear", "log"), default="linear", help="X-axis scale for sweep analysis plots.")
     AppLauncher.add_app_launcher_args(parser)
     return parser.parse_args()
 
@@ -243,6 +246,108 @@ def write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
         writer.writerows(rows)
 
 
+def to_float_or_nan(value: Any) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return float("nan")
+
+
+def varied_condition_fields(conditions: list[dict[str, Any]]) -> list[str]:
+    varied_fields = []
+    for field_name in SINGLE_RUN_FIELDS:
+        values = {condition.get(field_name) for condition in conditions if field_name in condition}
+        if len(values) > 1:
+            varied_fields.append(field_name)
+    return varied_fields
+
+
+def choose_sweep_axis(varied_fields: list[str]) -> str | None:
+    for preferred in ("trampoline_mass", "ball_mass", "youngs_modulus", "elasticity_damping", "damping_scale"):
+        if preferred in varied_fields:
+            return preferred
+    return varied_fields[0] if varied_fields else None
+
+
+def build_sweep_analysis_rows(rows: list[dict[str, Any]], conditions: list[dict[str, Any]], sweep_axis: str | None) -> list[dict[str, Any]]:
+    analysis_rows = []
+    varied_fields = varied_condition_fields(conditions)
+    for index, row in enumerate(rows):
+        condition = conditions[index]
+        sweep_value = condition.get(sweep_axis) if sweep_axis is not None else index
+        analysis_row = {
+            "sweep_axis": sweep_axis or "condition_index",
+            "sweep_value": sweep_value,
+            "label": row.get("label", condition.get("label", f"condition_{index:03d}")),
+            "first_min_ball_z_m": row.get("first_min_ball_z_m"),
+            "first_min_ball_z_time_s": row.get("first_min_ball_z_time_s"),
+            "first_apex_height_m": row.get("first_apex_height_m"),
+            "first_apex_time_s": row.get("first_apex_time_s"),
+            "final_state": row.get("final_state"),
+            "fallthrough": row.get("fallthrough"),
+            "fell_off_edge": row.get("fell_off_edge"),
+            "summary_path": row.get("summary_path"),
+            "run_dir": row.get("run_dir"),
+        }
+        for field_name in varied_fields:
+            analysis_row[field_name] = condition.get(field_name)
+        analysis_rows.append(analysis_row)
+    return analysis_rows
+
+
+def plot_sweep_analysis(analysis_rows: list[dict[str, Any]], output_path: Path, xscale: str) -> Path | None:
+    finite_rows = [
+        row for row in analysis_rows
+        if math.isfinite(to_float_or_nan(row["sweep_value"]))
+    ]
+    if not finite_rows:
+        return None
+
+    try:
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+    except ImportError as exc:
+        raise RuntimeError("matplotlib is required to plot sweep analysis.") from exc
+
+    finite_rows.sort(key=lambda row: to_float_or_nan(row["sweep_value"]))
+    x = [to_float_or_nan(row["sweep_value"]) for row in finite_rows]
+    if xscale == "log" and any(value <= 0.0 for value in x):
+        raise ValueError("sweep_xscale='log' requires all sweep x values to be positive.")
+    first_min = [to_float_or_nan(row["first_min_ball_z_m"]) for row in finite_rows]
+    first_apex = [to_float_or_nan(row["first_apex_height_m"]) for row in finite_rows]
+    x_label = finite_rows[0]["sweep_axis"]
+
+    fig, ax = plt.subplots(figsize=(8, 4.5))
+    ax.plot(x, first_min, marker="o", linewidth=2.5, label="first compression min ball z")
+    ax.plot(x, first_apex, marker="s", linewidth=1.8, label="first apex height")
+    ax.axhline(0.0, color="tab:gray", linestyle=":", linewidth=1)
+    ax.set_xlabel(str(x_label))
+    ax.set_xscale(xscale)
+    ax.set_ylabel("ball z / apex height [m]")
+    ax.grid(True, alpha=0.3)
+    ax.legend(loc="best")
+    fig.suptitle("IsaacLab ball-drop sweep analysis")
+    fig.tight_layout()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, dpi=160)
+    plt.close(fig)
+    return output_path
+
+
+def write_sweep_analysis(sweep_root: Path, rows: list[dict[str, Any]], conditions: list[dict[str, Any]], xscale: str) -> dict[str, str | None]:
+    sweep_axis = choose_sweep_axis(varied_condition_fields(conditions))
+    analysis_rows = build_sweep_analysis_rows(rows, conditions, sweep_axis)
+    analysis_csv_path = sweep_root / SWEEP_ANALYSIS_FILENAME
+    write_csv(analysis_csv_path, analysis_rows)
+    plot_path = plot_sweep_analysis(analysis_rows, sweep_root / SWEEP_ANALYSIS_PLOT_FILENAME, xscale)
+    return {
+        "sweep_analysis_csv": str(analysis_csv_path),
+        "sweep_analysis_plot": str(plot_path) if plot_path is not None else None,
+    }
+
+
 def format_yaml_scalar(value: Any) -> str:
     if isinstance(value, bool):
         return "true" if value else "false"
@@ -332,6 +437,10 @@ def apply_sweep_config_options(args: argparse.Namespace, config: dict[str, Any])
         args.video = bool(config["video"])
     if "headless" in config and hasattr(args, "headless"):
         args.headless = bool(config["headless"])
+    if "sweep_xscale" in config:
+        args.sweep_xscale = str(config["sweep_xscale"])
+    if args.sweep_xscale not in ("linear", "log"):
+        raise ValueError("sweep_xscale must be 'linear' or 'log'.")
     for field_name in ("video_width", "video_height", "video_fps"):
         if field_name in config:
             setattr(args, field_name, int(config[field_name]))
@@ -350,6 +459,8 @@ def run_sweep(args: argparse.Namespace) -> None:
     summary_path = sweep_root / SWEEP_SUMMARY_FILENAME
     params_path = sweep_root / PARAMS_FILENAME
     write_csv(summary_path, rows)
+    analysis_artifacts = write_sweep_analysis(sweep_root, rows, conditions, args.sweep_xscale)
+    artifacts = {"sweep_summary_csv": str(summary_path), **analysis_artifacts}
     write_yaml(
         params_path,
         {
@@ -362,11 +473,15 @@ def run_sweep(args: argparse.Namespace) -> None:
             "run_dir": str(sweep_root),
             "video": bool(args.video),
             "headless": bool(getattr(args, "headless", False)),
+            "sweep_xscale": args.sweep_xscale,
             "conditions": conditions,
-            "artifacts": {"sweep_summary_csv": str(summary_path)},
+            "artifacts": artifacts,
         },
     )
     print(f"WROTE {summary_path}", flush=True)
+    for artifact_path in analysis_artifacts.values():
+        if artifact_path is not None:
+            print(f"WROTE {artifact_path}", flush=True)
     print(f"WROTE {params_path}", flush=True)
     print(f"RUN_DIR {sweep_root}", flush=True)
 

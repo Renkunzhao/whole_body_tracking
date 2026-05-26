@@ -57,6 +57,48 @@ support with a deformable trampoline and repins the trampoline rim. Task success
 does not rely on rigid-deformable contact sensors. Apex and foot-clearance gates
 use only root state and kinematic foot body positions.
 
+\section{Trampoline Ball-Drop Alignment}
+
+The current trampoline response targets are defined by ball-drop comparisons.
+The old IsaacLab settings are shown together, while the new IsaacLab candidates
+are paired with the corresponding MuJoCo mass endpoints.
+
+\begin{center}
+\scriptsize
+\begin{tabular}{p{0.15\linewidth}p{0.26\linewidth}p{0.095\linewidth}p{0.12\linewidth}p{0.12\linewidth}p{0.08\linewidth}p{0.11\linewidth}}
+\hline
+Case & Parameters & Max comp. (m) & First min $z$ @ $t$ & First apex $h$ @ $t$ & Second apex (m) & Stable comp. @ $t$ \\
+\hline
+old / lowdamp / IsaacLab &
+\texttt{th=0.1, mass=5, res=10, E=8e4, edamp=0.01, dscale=1.0} &
+0.1703 & $-0.1189$ @ 0.512 & 0.2731 @ 0.820 & 0.0274 & 0.0164 @ 1.786 \\
+old / highdamp / IsaacLab &
+\texttt{th=0.1, mass=5, res=10, E=8e4, edamp=0.1, dscale=1.0} &
+0.1884 & $-0.1161$ @ 0.532 & $-0.0183$ @ 1.168 & -- & 0.0450 @ 1.026 \\
+\hline
+new mass=10 / candidate / IsaacLab &
+\texttt{th=0.05, mass=7.5, res=15, E=1.5e5, edamp=0.005, dscale=0.5} &
+0.1826 & $-0.1563$ @ 0.540 & 0.1570 @ 0.826 & 0.0128 & 0.0414 @ 1.838 \\
+new mass=10 / target / MuJoCo &
+\texttt{mass=10, radius=0.03, spacing=1.5, solref=0.01 1} &
+0.1880 & $-0.1769$ @ 0.518 & 0.1415 @ 0.791 & $-0.0117$ & 0.0810 @ 2.587 \\
+\hline
+new mass=100 / candidate / IsaacLab &
+\texttt{th=0.05, mass=20, res=15, E=3e5, edamp=0.005, dscale=0.5} &
+0.0967 & $-0.0714$ @ 0.536 & 0.0410 @ 0.708 & $-0.0056$ & 0.0312 @ 1.188 \\
+new mass=100 / target / MuJoCo &
+\texttt{mass=100, radius=0.03, spacing=1.5, solref=0.01 1} &
+0.0871 & $-0.0820$ @ 0.499 & $-0.0055$ @ 0.662 & $-0.0233$ & 0.0539 @ 1.516 \\
+\hline
+\end{tabular}
+\end{center}
+
+All six runs were stable with no fallthrough or off-edge failure. The new
+mass=10 candidate matches the MuJoCo mass=10 dynamic compression and first
+rebound height reasonably well, but its steady-state compression remains too
+shallow. The new mass=100 candidate is close in dynamic compression but still
+rebounds slightly too high and also settles too shallow.
+
 \section{Timing}
 
 The simulator time step and action decimation are

@@ -13,5 +13,6 @@ Project-specific Claude notes also live in `.claude/CLAUDE.md`.
 - Do not guess uncertain details or intent. Ask for clarification before changing code when requirements are ambiguous.
 - Before editing code, provide a short plan that states the purpose, the file list, and why each file will be modified.
 - Keep implementations minimal and directly executable. Do not add compatibility layers, aliases, fallbacks, or defensive scaffolding unless explicitly required. When a planned change makes related old code obsolete, clean up that obsolete task-related code; do not touch unrelated unused code outside the plan scope.
+- Do not introduce alternate parameter names or alias mappings. Use the canonical names already used by the script/config, and require callers to use those names unless the user explicitly asks for an alias.
 - Do not modify anything unrelated to the stated plan purpose. If editing files outside the planned file list becomes necessary, ask for confirmation first. 
 - Avoid incidental formatting, whitespace, or style-only changes.

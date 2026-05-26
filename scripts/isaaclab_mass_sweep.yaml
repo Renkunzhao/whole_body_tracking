@@ -1,0 +1,29 @@
+name: mass_sweep
+
+base:
+  sim_time: 4.0
+  sim_dt: 0.002
+  ball_height: 1.0
+  ball_mass: 4.02
+
+  thickness: 0.05
+  trampoline_mass: 20
+  sim_resolution: 15
+
+  youngs_modulus: 3e5
+  dynamic_friction: 0.8
+  elasticity_damping: 0.005
+  damping_scale: 0.5
+  poissons_ratio: 0.35
+
+  stable_vz_threshold: 0.05
+  stable_window_s: 0.2
+  apex_vz_hysteresis: 0.05
+
+sweep:
+  trampoline_mass: [5, 7.5, 10, 12.5, 15, 17.5, 20, 22.5, 25]
+
+video: true
+video_width: 1280
+video_height: 720
+video_fps: 30
