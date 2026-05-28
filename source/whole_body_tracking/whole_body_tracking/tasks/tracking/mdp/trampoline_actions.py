@@ -9,7 +9,7 @@ from isaaclab.managers.action_manager import ActionTerm
 from isaaclab.managers.manager_term_cfg import ActionTermCfg
 from isaaclab.utils import configclass
 
-from whole_body_tracking.utils.trampoline_deformable import TRAMPOLINE_PIN_WIDTH, build_trampoline_kinematic_targets
+from whole_body_tracking.utils.trampoline_deformable import TRAMPOLINE_PIN_RADIUS, build_trampoline_kinematic_targets
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +25,7 @@ class TrampolinePinningAction(ActionTerm):
         self._export_IO_descriptor = False
         self._raw_actions = torch.zeros((self.num_envs, 0), device=self.device)
         self._processed_actions = torch.zeros_like(self._raw_actions)
-        self._pin_width = cfg.pin_width
+        self._pin_radius = cfg.pin_radius
         self._targets = torch.zeros_like(self._asset.data.nodal_kinematic_target)
         self._pinned_mask = torch.zeros_like(self._asset.data.nodal_kinematic_target[..., 3], dtype=torch.bool)
         self._center_node_ids = torch.zeros((self.num_envs,), device=self.device, dtype=torch.long)
@@ -79,7 +79,7 @@ class TrampolinePinningAction(ActionTerm):
         targets, pinned_mask, center_node_ids = build_trampoline_kinematic_targets(
             self._asset.data.default_nodal_state_w[index],
             self._asset.data.nodal_kinematic_target[index],
-            pin_width=self._pin_width,
+            pin_radius=self._pin_radius,
         )
         self._targets[index] = targets
         self._pinned_mask[index] = pinned_mask
@@ -107,4 +107,4 @@ class TrampolinePinningActionCfg(ActionTermCfg):
     """Configuration for deformable trampoline rim pinning."""
 
     class_type: type = TrampolinePinningAction
-    pin_width: float = TRAMPOLINE_PIN_WIDTH
+    pin_radius: float = TRAMPOLINE_PIN_RADIUS

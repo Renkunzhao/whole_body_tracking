@@ -21,7 +21,6 @@ from whole_body_tracking.robots.go2 import (
     get_go2_spawn_cfg,
 )
 from whole_body_tracking.utils.trampoline_deformable import (
-    TRAMPOLINE_PIN_WIDTH,
     TRAMPOLINE_RADIUS,
     TRAMPOLINE_THICKNESS,
     TRAMPOLINE_TOP_Z,
@@ -261,7 +260,6 @@ class Go2HoppingFlatEnvCfg(DirectRLEnvCfg):
     )
     trampoline: DeformableObjectCfg | None = None
     trampoline_radius = TRAMPOLINE_RADIUS
-    trampoline_pin_width = TRAMPOLINE_PIN_WIDTH
     trampoline_thickness = TRAMPOLINE_THICKNESS
     trampoline_surface_height = TRAMPOLINE_TOP_Z
     trampoline_robot_clearance = 0.0
