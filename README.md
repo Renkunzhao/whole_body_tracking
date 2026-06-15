@@ -167,4 +167,7 @@ This structure is designed to ensure modularity and ease of navigation for devel
 ```bash
 sudo setfacl -m u:kren:rwx /tmp/isaaclab/logs
 sudo setfacl -d -m u:kren:rwx /tmp/isaaclab/logs
+
+python scripts/isaaclab_trampoline_ball_drop.py --headless --sweep_config scripts/isaaclab_param.yaml
+python scripts/mujoco_trampoline_ball_drop.py --sweep_config scripts/mujoco_param.yaml
 ```
