@@ -66,3 +66,43 @@ def reset_drop_from_height(
     joint_pos = asset.data.default_joint_pos[env_ids].clone()
     joint_vel = torch.zeros_like(joint_pos)
     asset.write_joint_state_to_sim(joint_pos, joint_vel, env_ids=env_ids)
+
+
+def reset_mixed_static_or_drop(
+    env: ManagerBasedRLEnv,
+    env_ids: torch.Tensor,
+    command_name: str = "hop",
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+    static_probability: float = 0.0,
+    drop_height_offset: float = 0.0,
+    drop_height_range: tuple[float, float] | None = None,
+    static_height_offset: float = 0.0,
+) -> None:
+    """Reset some envs from default standing pose and others from sampled drop height."""
+    asset: Articulation = env.scene[asset_cfg.name]
+    cmd = env.command_manager.get_term(command_name)
+    n_ids = len(env_ids)
+    dev = asset.device
+
+    h_lo, h_hi = cmd.cfg.ranges.peak_height
+    h_cmd = torch.empty(n_ids, device=dev).uniform_(h_lo, h_hi)
+    cmd._target_apex_height[env_ids] = h_cmd
+    if drop_height_range is None:
+        h_drop = h_cmd
+    else:
+        h_drop = torch.empty(n_ids, device=dev).uniform_(*drop_height_range)
+
+    root_state = asset.data.default_root_state[env_ids].clone()
+    root_state[:, 0:3] = root_state[:, 0:3] + env.scene.env_origins[env_ids]
+    static_z = root_state[:, 2] + static_height_offset
+    drop_z = env.scene.env_origins[env_ids, 2] + drop_height_offset + h_drop
+    use_static = torch.rand(n_ids, device=dev) < static_probability
+    root_state[:, 2] = torch.where(use_static, static_z, drop_z)
+    root_state[:, 7:13] = 0.0
+
+    asset.write_root_pose_to_sim(root_state[:, 0:7], env_ids=env_ids)
+    asset.write_root_velocity_to_sim(root_state[:, 7:13], env_ids=env_ids)
+
+    joint_pos = asset.data.default_joint_pos[env_ids].clone()
+    joint_vel = torch.zeros_like(joint_pos)
+    asset.write_joint_state_to_sim(joint_pos, joint_vel, env_ids=env_ids)

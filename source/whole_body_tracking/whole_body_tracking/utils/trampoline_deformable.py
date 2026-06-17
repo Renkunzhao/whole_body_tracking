@@ -41,7 +41,7 @@ def make_trampoline_cfg(
                 settling_threshold=0.02,
                 self_collision=False,
                 simulation_hexahedral_resolution=sim_resolution,
-                contact_offset=0.01,
+                # contact_offset=0.01,
                 rest_offset=0.0,
             ),
             visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.15, 0.35, 0.95), metallic=0.05),

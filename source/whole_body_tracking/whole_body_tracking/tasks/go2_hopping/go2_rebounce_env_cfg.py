@@ -60,15 +60,18 @@ TRAMPOLINE_FIXED_ELASTICITY_DAMPING_RANGE = (0.02, 0.02)
 TRAMPOLINE_FIXED_DAMPING_SCALE_RANGE = (1.0, 1.0)
 TRAMPOLINE_FIXED_POISSONS_RATIO_RANGE = (0.35, 0.35)
 REBOUNCE_HEIGHT_RANGE = (0.5, 1.2)
+MIXED_RESET_STATIC_PROBABILITY = 0.5
+MIXED_RESET_DROP_HEIGHT_RANGE = (0.3, 1.2)
+MIXED_RESET_STATIC_HEIGHT_OFFSET = 0.0
 TRAMPOLINE_DR_YOUNGS_MODULUS_RANGE = (8.0e4, 8.0e5)
-TRAMPOLINE_DR_MASS_RANGE = (5.0, 15.0)
+TRAMPOLINE_DR_MASS_RANGE = (5.0, 20.0)
 TRAMPOLINE_DR_DYNAMIC_FRICTION_RANGE = (0.4, 1.2)
 TRAMPOLINE_DR_ELASTICITY_DAMPING_RANGE = (0.003, 0.008)
 TRAMPOLINE_DR_DAMPING_SCALE_RANGE = (0.4, 0.6)
 TRAMPOLINE_DR_POISSONS_RATIO_RANGE = (0.25, 0.45)
 
 # Delay energy optimization until after robust hopping and trampoline adaptation are learned.
-ENERGY_PENALTY_START_STEP = 5000 * 24
+# ENERGY_PENALTY_START_STEP = 5000 * 24
 
 
 GO2_HOPPING_CFG = get_go2_cfg(
@@ -375,17 +378,16 @@ class EventCfg:
         },
     )
 
-    # reset — rebounce: sample target apex height and initial drop height
-    # independently, teleport robot to the drop height with zero velocity and
-    # default joint pose, and write the sampled target into the command buffer.
-    reset_drop = EventTerm(
-        func=mdp.reset_drop_from_height,
+    reset_mixed = EventTerm(
+        func=mdp.reset_mixed_static_or_drop,
         mode="reset",
         params={
             "command_name": "hop",
             "asset_cfg": SceneEntityCfg("robot"),
+            "static_probability": MIXED_RESET_STATIC_PROBABILITY,
             "drop_height_offset": 0.0,
-            "drop_height_range": REBOUNCE_HEIGHT_RANGE,
+            "drop_height_range": MIXED_RESET_DROP_HEIGHT_RANGE,
+            "static_height_offset": MIXED_RESET_STATIC_HEIGHT_OFFSET,
         },
     )
 
@@ -513,14 +515,14 @@ class CurriculumCfg:
             "num_steps": HOPPING_INIT_STEP,
         },
     )
-    enable_energy_penalty = CurrTerm(
-        func=modify_reward_weight,
-        params={
-            "term_name": "energy_penalty",
-            "weight": -1.5e-2,
-            "num_steps": ENERGY_PENALTY_START_STEP,
-        },
-    )
+    # enable_energy_penalty = CurrTerm(
+    #     func=modify_reward_weight,
+    #     params={
+    #         "term_name": "energy_penalty",
+    #         "weight": -1.5e-2,
+    #         "num_steps": ENERGY_PENALTY_START_STEP,
+    #     },
+    # )
 
 
 ##
@@ -565,7 +567,7 @@ class Go2RebounceEnvCfg(ManagerBasedRLEnvCfg):
 
     def apply_play_overrides(self):
         self.commands.hop.ranges.peak_height = REBOUNCE_HEIGHT_RANGE
-        self.events.reset_drop.params["drop_height_range"] = REBOUNCE_HEIGHT_RANGE
+        self.events.reset_mixed.params["drop_height_range"] = REBOUNCE_HEIGHT_RANGE
         return self
 
 
