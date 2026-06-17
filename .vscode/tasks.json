@@ -70,6 +70,12 @@
       "default": "1",
     },
     {
+      "id": "num_gpus",
+      "type": "promptString",
+      "description": "Type number of GPUs for multi-GPU training",
+      "default": "2",
+    },
+    {
       "id": "wandb_path",
       "type": "promptString",
       "description": "Type wandb run path",
@@ -245,6 +251,32 @@
         "--run_name", "wbt-${input:output_name}"
       ],
       "options": { "cwd": "${workspaceFolder}/scripts", "env": { "CUDA_VISIBLE_DEVICES": "1" } },
+      "problemMatcher": []
+    },
+    {
+      "label": "Train (Multi GPU)",
+      "type": "shell",
+      "command": "conda",
+      "args": [
+        "run",
+        "--no-capture-output",
+        "-n", "isaaclab",
+        "torchrun",
+        "--nproc_per_node", "${input:num_gpus}",
+        "rsl_rl/train.py",
+        "--task", "${input:Task}",
+        "--distributed",
+        "--headless",
+        // "env.viewer.origin_type=world",
+        // "--video",
+        // "--video_interval", "${input:video_interval}",
+        // "--registry_name", "${input:ion}",
+        // "--wandb_path", "${input:wandb_path}",
+        "--logger", "wandb",
+        "--log_project_name", "trampoline",
+        "--run_name", "${input:output_name}"
+      ],
+      "options": { "cwd": "${workspaceFolder}/scripts" },
       "problemMatcher": []
     },
     {
